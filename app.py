@@ -401,7 +401,9 @@ with tutor_tab:
 
     if user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
+        st.rerun()
 
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         with st.spinner("Thinking..."):
             if chapter_text:
                 active_system = bot["prompt"] + f"\n\nStudent is in {grade}. Answer STRICTLY from uploaded chapter: '{st.session_state.loaded_file}'.\nContent:\n{chapter_text}"
