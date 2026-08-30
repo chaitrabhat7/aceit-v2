@@ -15,30 +15,25 @@ Students follow NCERT textbooks.
 YOUR TEACHING STYLE:
 You teach exactly like an experienced Indian maths tutor who knows her students well.
 
-STEP 1 - RULE: Always make the student attempt first, regardless of 
-whether the topic is new or familiar.
-If topic appears new:
-- Briefly introduce the concept in 1-2 lines.
-- Then ask: "Now you try - what do you think the first 
-  step should be?"
-- Wait for their attempt before showing anything.
+STEP 1 - GAUGE FIRST:
+- From the chat history, judge if this topic is fresh or familiar to the student.
+- If it's the first time they're asking about this concept, assume it's new.
 
-STEP 2 - Socratic method:
-If topic is familiar (visible from chat history):
-- Skip introduction, go straight to guiding question.
-- Use the Socratic method - ask guiding questions.
-- If they seem lost after 1-2 attempts, switch to direct explanation.
+STEP 2 - IF TOPIC IS NEW:
+- Give a brief, friendly introduction to the concept first.
+- Then show them HOW to solve it directly using your signature tricks.
+- Never jump to Socratic method on a brand new topic.
 
 STEP 3 - YOUR SIGNATURE TRICKS:
-- Only reveal shortcuts AFTER the student has attempted 
-  and shown their working.
-- For linear equations: the MOVE and FLIP method 
-  (+ becomes -, × becomes ÷).
-- Teach the shortcut as a reward for attempting, 
-  not as an opener.
+- For linear equations like x + 2 = 5: teach them to MOVE the number to the other side and FLIP the sign (+ becomes -, × becomes ÷).
+- Always teach the fastest, most intuitive shortcut first.
 - Don't break down simple arithmetic steps like 8÷2 into separate questions.
 
-STEP 4 - CHECKING ANSWERS:
+STEP 4 - IF TOPIC IS FAMILIAR:
+- Use the Socratic method — ask guiding questions.
+- If they seem lost after 1-2 attempts, switch to direct explanation.
+
+STEP 5 - CHECKING ANSWERS:
 - ALWAYS verify the student's answer mathematically before responding.
 - Use the appropriate verification method for the topic.
 - If wrong, NEVER say "Perfect!", "Correct!" or "Well done!".
@@ -46,16 +41,16 @@ STEP 4 - CHECKING ANSWERS:
 - Only praise after the correct answer is confirmed.
 
 YOUR BOUNDARIES:
-- NEVER solve a problem directly. 
-  If a student asks for the answer, respond only with 
-  a guiding question. No exceptions.
+- Only discuss Maths topics relevant to Class 7-10 NCERT syllabus.
+- Warmly redirect if student goes off topic.
+- Never do homework directly — guide them to the answer."""
 
 SHAKESPEARE_PROMPT = """You are Shakespeare, a warm, creative and encouraging CBSE Class 7-10 English Grammar tutor for students in India.
 
 YOUR CORE PHILOSOPHY:
 - Grammar is best learned in context, not in isolation
 - Never teach a grammar rule without showing it alive in a real sentence or passage first
-- Students must know correct terminology for exams - but understand it through natural use
+- Students must know correct terminology for exams — but understand it through natural use
 
 YOUR TEACHING APPROACH:
 
@@ -84,7 +79,7 @@ YOUR BOUNDARIES:
 - Guide them to write themselves
 
 PASSAGE WRITING STYLE:
-- Use Indian contexts - school life, festivals, cricket, family, markets, nature
+- Use Indian contexts — school life, festivals, cricket, family, markets, nature
 - Characters should have Indian names
 - Vocabulary appropriate to Class 7 level"""
 
@@ -92,7 +87,7 @@ COLUMBUS_PROMPT = """You are Columbus, a warm and engaging CBSE Social Studies t
 
 CRITICAL RULE:
 - You ONLY answer from the uploaded chapter. If no chapter is uploaded, politely tell the student to upload their chapter PDF first before asking questions.
-- Never answer Social Studies questions from general knowledge alone - always stay anchored to the textbook.
+- Never answer Social Studies questions from general knowledge alone — always stay anchored to the textbook.
 
 YOUR TEACHING APPROACH:
 
@@ -126,19 +121,19 @@ YOUR PERSONALITY:
 
 YOUR BOUNDARIES:
 - Stay strictly within the uploaded chapter
-- NCERT textbook is your anchor - never wander far from it
+- NCERT textbook is your anchor — never wander far from it
 - If student goes off topic, warmly redirect them back to the chapter
-- Never write full answers for students - guide them to construct answers themselves"""
+- Never write full answers for students — guide them to construct answers themselves"""
 
 # ─── Bot Configuration ────────────────────────────────────────
 BOTS = {
-    "🧮 Maths - Archimedes": {
+    "🧮 Maths — Archimedes": {
         "prompt": ARCHIMEDES_PROMPT,
         "grades": ["Class 7", "Class 8", "Class 9", "Class 10"],
         "topics": ["Algebra", "Geometry", "Trigonometry", "Statistics", "Mensuration"],
         "placeholder": "Ask Archimedes a maths question..."
     },
-    "📚 English - Shakespeare": {
+    "📚 English — Shakespeare": {
         "prompt": SHAKESPEARE_PROMPT,
         "grades": ["Class 7", "Class 8", "Class 9", "Class 10"],
         "topics": ["Nouns", "Pronouns", "Verbs", "Adjectives", "Adverbs",
@@ -149,7 +144,7 @@ BOTS = {
            "Editing & Omission", "Gap Filling"],
         "placeholder": "Ask Shakespeare an English Grammar question..."
     },
-    "🌍 Social Studies - Columbus": {
+    "🌍 Social Studies — Columbus": {
         "prompt": COLUMBUS_PROMPT,
         "grades": ["Class 7", "Class 8", "Class 9", "Class 10"],
         "topics": ["History", "Geography", "Civics", "Economics"],
@@ -178,7 +173,7 @@ DIFFICULTY_INSTRUCTIONS = {
 - Higher Order Thinking Skills questions ONLY
 - No question should have a direct answer from the textbook
 - Student must APPLY concept to an unfamiliar situation
-- ALL 4 options must be plausible - no obviously wrong options
+- ALL 4 options must be plausible — no obviously wrong options
 - Wrong options must represent common misconceptions
 - Question stems must use: "What would happen if...", 
   "Why does...", "A student observes that... what can you conclude", 
@@ -291,10 +286,10 @@ Your job:
 
 Respond with ONLY this JSON structure, nothing else:
 {{
-    "detected_topic": "string - main topic in 3-5 words",
-    "detected_grade": "string - e.g. Class 9",
+    "detected_topic": "string — main topic in 3-5 words",
+    "detected_grade": "string — e.g. Class 9",
     "confidence": "high or medium or low",
-    "summary": "string - one sentence describing what this content covers"
+    "summary": "string — one sentence describing what this content covers"
 }}"""
 
     response = client.messages.create(
@@ -390,10 +385,10 @@ with tutor_tab:
     if st.session_state.get("loaded_file"):
         st.success(f"📖 Answering from: **{st.session_state.loaded_file}**")
     else:
-        st.warning("⚠️ No chapter uploaded - tutor is using general knowledge.")
+        st.warning("⚠️ No chapter uploaded — tutor is using general knowledge.")
 
     # Force PDF upload for Columbus
-    if selected_bot == "🌍 Social Studies - Columbus" and not st.session_state.get("loaded_file"):
+    if selected_bot == "🌍 Social Studies — Columbus" and not st.session_state.get("loaded_file"):
         st.error("📚 Columbus works only with uploaded chapters. Please upload your Social Studies chapter PDF from the sidebar first!")
         st.stop()
 
@@ -427,7 +422,7 @@ with tutor_tab:
         st.rerun()
 with quiz_tab:
     st.title("🧠 Quiz Mode")
-    st.caption("Generate MCQs instantly - by topic or from your own PDF")
+    st.caption("Generate MCQs instantly — by topic or from your own PDF")
     st.divider()
 
     # ── Subject + Grade ───────────────────────────────────────
@@ -494,7 +489,7 @@ with quiz_tab:
                         quiz_topic = detected["detected_topic"]
                         st.success(
                             f"📌 Detected: **{detected['detected_topic']}** "
-                            f"- {detected['summary']}"
+                            f"— {detected['summary']}"
                         )
                     except Exception as e:
                         st.error(f"❌ Could not detect topic: {e}")
@@ -556,8 +551,8 @@ with quiz_tab:
     if st.session_state.quiz_questions:
         st.divider()
         st.subheader(
-            f"📋 {st.session_state.quiz_topic} - "
-            f"{st.session_state.quiz_grade} - "
+            f"📋 {st.session_state.quiz_topic} — "
+            f"{st.session_state.quiz_grade} — "
             f"{st.session_state.quiz_difficulty}"
         )
 
@@ -623,11 +618,11 @@ with quiz_tab:
                 else:
                     st.error(f"❌ Q{i+1}. {q['question']}")
                     st.markdown(
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;**Your answer:** {student_ans} - "
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;**Your answer:** {student_ans} — "
                         f"{q['options'].get(student_ans, 'Not answered')}"
                     )
                     st.markdown(
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;**Correct answer:** {correct_ans} - "
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;**Correct answer:** {correct_ans} — "
                         f"{q['options'][correct_ans]}"
                     )
                     report_lines.append(f"Q{i+1}: ❌ WRONG")
@@ -727,7 +722,7 @@ with quiz_tab:
                     pdf.multi_cell(effective_width, 6, safe(result))
                     pdf.ln(2)
 
-                    # Explanation - split into chunks if too long
+                    # Explanation — split into chunks if too long
                     pdf.set_font("Helvetica", "I", 10)
                     pdf.set_x(15)
                     exp = safe(f"Explanation: {q['explanation']}")
