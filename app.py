@@ -17,7 +17,6 @@ You teach exactly like an experienced Indian maths tutor who knows her students 
 
 STEP 1 - RULE: Always make the student attempt first, regardless of 
 whether the topic is new or familiar.
-
 If topic appears new:
 - Briefly introduce the concept in 1-2 lines.
 - Then ask: "Now you try - what do you think the first 
@@ -127,19 +126,19 @@ YOUR PERSONALITY:
 
 YOUR BOUNDARIES:
 - Stay strictly within the uploaded chapter
-- NCERT textbook is your anchor — never wander far from it
+- NCERT textbook is your anchor - never wander far from it
 - If student goes off topic, warmly redirect them back to the chapter
 - Never write full answers for students - guide them to construct answers themselves"""
 
 # ─── Bot Configuration ────────────────────────────────────────
 BOTS = {
-    "🧮 Maths — Archimedes": {
+    "🧮 Maths - Archimedes": {
         "prompt": ARCHIMEDES_PROMPT,
         "grades": ["Class 7", "Class 8", "Class 9", "Class 10"],
         "topics": ["Algebra", "Geometry", "Trigonometry", "Statistics", "Mensuration"],
         "placeholder": "Ask Archimedes a maths question..."
     },
-    "📚 English — Shakespeare": {
+    "📚 English - Shakespeare": {
         "prompt": SHAKESPEARE_PROMPT,
         "grades": ["Class 7", "Class 8", "Class 9", "Class 10"],
         "topics": ["Nouns", "Pronouns", "Verbs", "Adjectives", "Adverbs",
@@ -150,7 +149,7 @@ BOTS = {
            "Editing & Omission", "Gap Filling"],
         "placeholder": "Ask Shakespeare an English Grammar question..."
     },
-    "🌍 Social Studies — Columbus": {
+    "🌍 Social Studies - Columbus": {
         "prompt": COLUMBUS_PROMPT,
         "grades": ["Class 7", "Class 8", "Class 9", "Class 10"],
         "topics": ["History", "Geography", "Civics", "Economics"],
@@ -179,7 +178,7 @@ DIFFICULTY_INSTRUCTIONS = {
 - Higher Order Thinking Skills questions ONLY
 - No question should have a direct answer from the textbook
 - Student must APPLY concept to an unfamiliar situation
-- ALL 4 options must be plausible — no obviously wrong options
+- ALL 4 options must be plausible - no obviously wrong options
 - Wrong options must represent common misconceptions
 - Question stems must use: "What would happen if...", 
   "Why does...", "A student observes that... what can you conclude", 
@@ -292,10 +291,10 @@ Your job:
 
 Respond with ONLY this JSON structure, nothing else:
 {{
-    "detected_topic": "string — main topic in 3-5 words",
-    "detected_grade": "string — e.g. Class 9",
+    "detected_topic": "string - main topic in 3-5 words",
+    "detected_grade": "string - e.g. Class 9",
     "confidence": "high or medium or low",
-    "summary": "string — one sentence describing what this content covers"
+    "summary": "string - one sentence describing what this content covers"
 }}"""
 
     response = client.messages.create(
@@ -391,10 +390,10 @@ with tutor_tab:
     if st.session_state.get("loaded_file"):
         st.success(f"📖 Answering from: **{st.session_state.loaded_file}**")
     else:
-        st.warning("⚠️ No chapter uploaded — tutor is using general knowledge.")
+        st.warning("⚠️ No chapter uploaded - tutor is using general knowledge.")
 
     # Force PDF upload for Columbus
-    if selected_bot == "🌍 Social Studies — Columbus" and not st.session_state.get("loaded_file"):
+    if selected_bot == "🌍 Social Studies - Columbus" and not st.session_state.get("loaded_file"):
         st.error("📚 Columbus works only with uploaded chapters. Please upload your Social Studies chapter PDF from the sidebar first!")
         st.stop()
 
@@ -428,7 +427,7 @@ with tutor_tab:
         st.rerun()
 with quiz_tab:
     st.title("🧠 Quiz Mode")
-    st.caption("Generate MCQs instantly — by topic or from your own PDF")
+    st.caption("Generate MCQs instantly - by topic or from your own PDF")
     st.divider()
 
     # ── Subject + Grade ───────────────────────────────────────
@@ -495,7 +494,7 @@ with quiz_tab:
                         quiz_topic = detected["detected_topic"]
                         st.success(
                             f"📌 Detected: **{detected['detected_topic']}** "
-                            f"— {detected['summary']}"
+                            f"- {detected['summary']}"
                         )
                     except Exception as e:
                         st.error(f"❌ Could not detect topic: {e}")
@@ -557,8 +556,8 @@ with quiz_tab:
     if st.session_state.quiz_questions:
         st.divider()
         st.subheader(
-            f"📋 {st.session_state.quiz_topic} — "
-            f"{st.session_state.quiz_grade} — "
+            f"📋 {st.session_state.quiz_topic} - "
+            f"{st.session_state.quiz_grade} - "
             f"{st.session_state.quiz_difficulty}"
         )
 
@@ -624,11 +623,11 @@ with quiz_tab:
                 else:
                     st.error(f"❌ Q{i+1}. {q['question']}")
                     st.markdown(
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;**Your answer:** {student_ans} — "
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;**Your answer:** {student_ans} - "
                         f"{q['options'].get(student_ans, 'Not answered')}"
                     )
                     st.markdown(
-                        f"&nbsp;&nbsp;&nbsp;&nbsp;**Correct answer:** {correct_ans} — "
+                        f"&nbsp;&nbsp;&nbsp;&nbsp;**Correct answer:** {correct_ans} - "
                         f"{q['options'][correct_ans]}"
                     )
                     report_lines.append(f"Q{i+1}: ❌ WRONG")
@@ -728,7 +727,7 @@ with quiz_tab:
                     pdf.multi_cell(effective_width, 6, safe(result))
                     pdf.ln(2)
 
-                    # Explanation — split into chunks if too long
+                    # Explanation - split into chunks if too long
                     pdf.set_font("Helvetica", "I", 10)
                     pdf.set_x(15)
                     exp = safe(f"Explanation: {q['explanation']}")
