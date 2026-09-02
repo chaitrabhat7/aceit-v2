@@ -3,10 +3,20 @@ import anthropic
 import os
 import json
 from dotenv import load_dotenv
+from langchain_groq import ChatGroq
 
 load_dotenv()
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+groq_client = ChatGroq(
+    model="openai/gpt-oss-120b",
+    api_key=os.getenv("GROQ_API_KEY"),
+    max_tokens=2000,
+    temperature=0.4
+)
+# NOTE: Groq output has been observed using LaTeX notation (e.g. \frac{24}{36})
+# in question/explanation text. st.markdown won't render this as math unless
+# wrapped in $...$, so it may show as raw backslash text in the quiz UI.
 
 # ─── System Prompts ───────────────────────────────────────────
 ARCHIMEDES_PROMPT = """You are Archimedes, a warm and encouraging CBSE Mathematics tutor for Class 7-10 students.
@@ -257,20 +267,22 @@ def build_quiz_prompt(subject, grade, difficulty,
 
 def generate_quiz(subject, grade, difficulty, num_questions,
                   topic=None, chapter_text=None):
-    
-    model = "claude-sonnet-4-6" if difficulty == "HOTS" else "claude-haiku-4-5"
-    
+
     prompt = build_quiz_prompt(subject, grade, difficulty,
                                num_questions, topic, chapter_text)
-    
-    response = client.messages.create(
-        model=model,
-        max_tokens=2000,
-        temperature=0.4,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    
-    raw = response.content[0].text
+
+    if difficulty == "HOTS":
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2000,
+            temperature=0.4,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = response.content[0].text
+    else:
+        response = groq_client.invoke(prompt)
+        raw = response.content
+
     clean = raw.replace("```json", "").replace("```", "").strip()
     if "[" in clean:
         clean = clean[clean.index("["):]
