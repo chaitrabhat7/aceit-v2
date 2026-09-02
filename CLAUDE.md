@@ -34,3 +34,13 @@ Then: Sprint 1C — session-level rate limiting.
 ## What NOT to build yet
 No login/auth, no student database, no admin dashboard, 
 no native mobile app, no multi-language support.
+Append this to CLAUDE.md under model decisions:
+
+## Actual model routing (verified in code Sep 2026)
+- Quiz Easy/Medium/Hard: Groq llama-3.3-70b-versatile
+- HOTS quiz: claude-sonnet-4-6
+- All tutor personas (Archimedes, Shakespeare, Columbus): claude-haiku-4-5
+
+Groq tested for all personas in playground — quality gap too large.
+Haiku stays for all tutor mode. Sonnet stays for HOTS only.
+Decision locked until after LinkedIn launch.
