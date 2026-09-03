@@ -27,9 +27,9 @@ This is both a real product and a learning project. Explain before writing.
 4. After every change, tell me what to test and how
 
 ## Current sprint
-Sprint 1A complete — Groq model swap done. 
-Next: Sprint 1B — RAG for Columbus PDF uploads.
-Then: Sprint 1C — session-level rate limiting.
+Sprint 1A complete — Groq model swap done.
+Sprint 1B complete — RAG for tutor PDF uploads (all three personas).
+Next: Sprint 1C — session-level rate limiting.
 
 ## What NOT to build yet
 No login/auth, no student database, no admin dashboard, 
@@ -44,3 +44,45 @@ Append this to CLAUDE.md under model decisions:
 Groq tested for all personas in playground — quality gap too large.
 Haiku stays for all tutor mode. Sonnet stays for HOTS only.
 Decision locked until after LinkedIn launch.
+
+Do not use sentence-transformers or PyTorch — too heavy for 
+Streamlit Community Cloud 1GB RAM limit.
+(Superseded: ChromaDB also dropped — see "Sprint 1B — complete" below.)
+
+Update CLAUDE.md — add these corrections to the Sprint 1B section:
+
+1. RAG applies to ALL three personas (Archimedes, Shakespeare, Columbus) 
+   — not Columbus only. All three have PDF upload in app.py.
+
+2. ChromaDB dropped — too heavy, C++ build breaks on Streamlit Cloud.
+   Using FastEmbed + in-memory NumPy cosine instead.
+
+3. sentence-transformers dropped — PyTorch dependency too heavy 
+   for Streamlit Cloud 1GB RAM limit.
+
+4. New dependency: fastembed only. Add to requirements.txt.
+
+5. Build RAG as one reusable function, called from all three 
+   persona upload paths.
+
+6. Chunk size 800, overlap 100, top-k 3 — tune after first test.
+
+## Sprint 1B — complete (Sep 2026)
+RAG for tutor-mode chapter uploads. Live and tested.
+
+- Applies to all three personas (Archimedes, Shakespeare, Columbus) via the
+  shared upload handler in app.py.
+- Stack: fastembed (BAAI/bge-small-en-v1.5, quantized ONNX — no PyTorch) for
+  embeddings; in-memory NumPy cosine for retrieval; hand-rolled text splitter.
+  No ChromaDB.
+- All RAG logic in rag.py: chunk_text -> embed_texts -> build_index -> retrieve
+  -> format_context. Index kept in st.session_state["rag_index"], rebuilt only
+  on a new upload.
+- Params: chunk size 800, overlap 100, top-k 3.
+- Result: 75-80% token reduction per question confirmed in Anthropic console.
+  Answer quality excellent — Columbus grounding especially strong, out-of-chapter
+  questions correctly refused.
+- Known limitation: retrieval query is the latest user message only; multi-turn
+  follow-ups ("explain that more") can drift. Revisit if it bites.
+- Known issue (not RAG): PyPDF2 garbles some NCERT embedded fonts — flagged for
+  a later sprint.

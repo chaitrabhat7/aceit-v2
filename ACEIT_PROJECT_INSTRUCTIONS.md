@@ -250,3 +250,9 @@ pip install streamlit anthropic langchain langchain-anthropic langchain-groq \
 ANTHROPIC_API_KEY=
 GROQ_API_KEY=       # Free at console.groq.com
 ```
+Update ACEIT_PROJECT_INSTRUCTIONS.md — correct the model routing table to:
+- Quiz Easy/Medium/Hard: Groq llama-3.3-70b-versatile (free tier)
+- Quiz HOTS: claude-sonnet-4-6
+- All tutor personas (Archimedes, Shakespeare, Columbus): claude-haiku-4-5
+
+This is the verified state from actual code, not the original plan.

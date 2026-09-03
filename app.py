@@ -4,6 +4,7 @@ import os
 import json
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
+import rag
 
 load_dotenv()
 
@@ -341,6 +342,8 @@ if "quiz_submitted" not in st.session_state:
     st.session_state.quiz_submitted = False
 if "student_answers" not in st.session_state:
     st.session_state.student_answers = {}
+if "rag_index" not in st.session_state:
+    st.session_state.rag_index = None
 
 
 # ─── Page Config ──────────────────────────────────────────────
@@ -360,6 +363,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.chapter_text = ""
         st.session_state.loaded_file = ""
+        st.session_state.rag_index = None
         st.session_state.current_bot = selected_bot
 
     bot = BOTS[selected_bot]
@@ -373,6 +377,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.chapter_text = ""
         st.session_state.loaded_file = ""
+        st.session_state.rag_index = None
 
 # ─── File Upload Handler ──────────────────────────────────────
 if uploaded_file:
@@ -389,6 +394,16 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"❌ Could not read PDF: {e}")
         st.session_state.loaded_file = uploaded_file.name
+
+        with st.spinner("Indexing chapter…"):
+            st.session_state.rag_index = rag.build_index(
+                st.session_state.chapter_text
+            )
+        if st.session_state.rag_index is None:
+            st.warning(
+                "⚠️ No readable text found — a scanned/image PDF won't work. "
+                "Try a text-based PDF or a .txt file."
+            )
 
 chapter_text = st.session_state.get("chapter_text", "")
 # ─── TABS ─────────────────────────────────────────────────────
@@ -423,8 +438,16 @@ with tutor_tab:
 
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         with st.spinner("Thinking..."):
-            if chapter_text:
-                active_system = bot["prompt"] + f"\n\nStudent is in {grade}. Answer STRICTLY from uploaded chapter: '{st.session_state.loaded_file}'.\nContent:\n{chapter_text}"
+            if st.session_state.rag_index:
+                query = st.session_state.messages[-1]["content"]
+                context = rag.format_context(
+                    rag.retrieve(st.session_state.rag_index, query, k=3)
+                )
+            else:
+                context = chapter_text
+
+            if context:
+                active_system = bot["prompt"] + f"\n\nStudent is in {grade}. Answer STRICTLY from uploaded chapter: '{st.session_state.loaded_file}'.\nContent:\n{context}"
             else:
                 active_system = bot["prompt"] + f"\n\nStudent is in {grade}. Use general NCERT knowledge."
 
