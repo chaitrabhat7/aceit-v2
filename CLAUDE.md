@@ -8,12 +8,12 @@ This is both a real product and a learning project. Explain before writing.
 ## Current state
 - Live at: https://aceit-v2-class7to10.streamlit.app/
 - GitHub: https://github.com/chaitrabhat7/aceit-v2
-- Stack: Python, Streamlit, Claude API, LangChain, Groq, PyPDF2, fpdf2
+- Stack: Python, Streamlit, Claude API, LangChain, Groq, PyPDF2, fpdf2, fastembed (RAG embeddings)
 
 ## Model routing — DO NOT change this without asking
-- Easy / Medium / Hard quiz: Groq llama-3.3-70b-versatile (free tier)
+- Easy / Medium / Hard quiz: Groq openai/gpt-oss-120b (free tier)
 - HOTS quiz: Claude Sonnet only — never swap this to Groq
-- All tutor mode personas: Claude Sonnet only
+- All tutor mode personas: Claude Haiku (claude-haiku-4-5) only
 
 ## Personas — DO NOT modify system prompts without asking
 - Archimedes: CBSE Maths tutor, intuition before formula
@@ -29,15 +29,15 @@ This is both a real product and a learning project. Explain before writing.
 ## Current sprint
 Sprint 1A complete — Groq model swap done.
 Sprint 1B complete — RAG for tutor PDF uploads (all three personas).
-Next: Sprint 1C — session-level rate limiting.
+Sprint 1C complete — session-level rate limiting.
+Next: Sprint 2 — image upload.
 
 ## What NOT to build yet
 No login/auth, no student database, no admin dashboard, 
 no native mobile app, no multi-language support.
-Append this to CLAUDE.md under model decisions:
 
 ## Actual model routing (verified in code Sep 2026)
-- Quiz Easy/Medium/Hard: Groq llama-3.3-70b-versatile
+- Quiz Easy/Medium/Hard: Groq openai/gpt-oss-120b
 - HOTS quiz: claude-sonnet-4-6
 - All tutor personas (Archimedes, Shakespeare, Columbus): claude-haiku-4-5
 
@@ -48,24 +48,6 @@ Decision locked until after LinkedIn launch.
 Do not use sentence-transformers or PyTorch — too heavy for 
 Streamlit Community Cloud 1GB RAM limit.
 (Superseded: ChromaDB also dropped — see "Sprint 1B — complete" below.)
-
-Update CLAUDE.md — add these corrections to the Sprint 1B section:
-
-1. RAG applies to ALL three personas (Archimedes, Shakespeare, Columbus) 
-   — not Columbus only. All three have PDF upload in app.py.
-
-2. ChromaDB dropped — too heavy, C++ build breaks on Streamlit Cloud.
-   Using FastEmbed + in-memory NumPy cosine instead.
-
-3. sentence-transformers dropped — PyTorch dependency too heavy 
-   for Streamlit Cloud 1GB RAM limit.
-
-4. New dependency: fastembed only. Add to requirements.txt.
-
-5. Build RAG as one reusable function, called from all three 
-   persona upload paths.
-
-6. Chunk size 800, overlap 100, top-k 3 — tune after first test.
 
 ## Sprint 1B — complete (Sep 2026)
 RAG for tutor-mode chapter uploads. Live and tested.
@@ -86,3 +68,20 @@ RAG for tutor-mode chapter uploads. Live and tested.
   follow-ups ("explain that more") can drift. Revisit if it bites.
 - Known issue (not RAG): PyPDF2 garbles some NCERT embedded fonts — flagged for
   a later sprint.
+
+## Sprint 1C — complete (Sep 2026)
+Session-level rate limiting. Live and tested.
+
+- Two counters in st.session_state: tutor_question_count, quiz_generation_count.
+- Caps: TUTOR_QUESTION_LIMIT = 30, QUIZ_GENERATION_LIMIT = 4 (module-level
+  constants in app.py, easy to retune).
+- Tutor gate checks before the question is appended to chat history — a
+  blocked question never sits unanswered in the conversation.
+- Quiz gate covers both the PDF-upload detect_topic call and the Generate
+  button, sharing one counter — an upload + a generate together spend 2 of
+  the 4.
+- Remaining counts shown in sidebar for both modes, live on every rerun.
+- Resets on page refresh (session state clears naturally — no extra reset
+  code needed).
+- Tested at temporary low limits (5 tutor / 3 quiz) first to confirm gating
+  works end to end, then set to real limits (30 / 4).

@@ -16,9 +16,9 @@ Every build decision optimises for: working fast, costing less, shipping sooner.
 - **Live URL:** https://aceit-v2-class7to10.streamlit.app/
 - **GitHub:** https://github.com/chaitrabhat7/aceit-v2
 - **Stack:** Python, Streamlit, Claude API (Anthropic), PyPDF2, fpdf2
-- **Models in use:** Claude Haiku (standard quiz), Claude Sonnet (HOTS quiz + all tutor mode)
+- **Models in use:** Groq openai/gpt-oss-120b (Quiz Easy/Medium/Hard, free tier), claude-sonnet-4-6 (Quiz HOTS), claude-haiku-4-5 (all tutor personas — Archimedes, Shakespeare, Columbus)
 - **What works:** Quiz mode (MCQ generation, 4 difficulty levels, PDF report), Tutor mode (Archimedes, Shakespeare, Columbus personas)
-- **What is broken/missing:** No RAG (PDF costs explode), no image upload, no model switching, no rate limiting, open-ended API calls per user
+- **What is broken/missing:** No image upload, no model switching (RAG and session rate limiting shipped — see Sprint 1B/1C below)
 
 ---
 
@@ -27,8 +27,9 @@ Every build decision optimises for: working fast, costing less, shipping sooner.
 | Layer | Tool | Purpose |
 |---|---|---|
 | UI | Streamlit | Web app frontend — no change |
-| AI (tutor + HOTS) | Claude Sonnet via Anthropic SDK | Pedagogical complexity — do not swap |
-| AI (standard quiz) | Groq API (Llama 3 or Mixtral) via LangChain | Cost reduction — free tier sufficient |
+| AI (tutor mode — all personas) | Claude Haiku (claude-haiku-4-5) via Anthropic SDK | Pedagogical complexity — do not swap |
+| AI (Quiz HOTS) | Claude Sonnet (claude-sonnet-4-6) via Anthropic SDK | Reasoning depth Groq cannot match — do not swap |
+| AI (Quiz Easy/Medium/Hard) | Groq openai/gpt-oss-120b via LangChain | Cost reduction — free tier sufficient |
 | Model abstraction | LangChain `ChatAnthropic` + `ChatGroq` | Clean model swapping without rewriting logic |
 | RAG | LangChain + ChromaDB (local) | Chunk, embed, retrieve before sending to LLM |
 | Embeddings | `sentence-transformers` (HuggingFace, free) | No API cost for embeddings |
@@ -95,19 +96,21 @@ def get_context(vectorstore: Chroma, query: str) -> str:
 
 ---
 
-**1C. Session-level rate limiting**
-- Add a simple per-session question counter in `st.session_state`
-- Hard cap: 30 questions per session (tutor mode) + 3 quiz generations per session
-- Show remaining count in sidebar
-- Reset on page refresh (session = browser session, no auth needed)
+**1C. Session-level rate limiting — COMPLETE (Sep 2026)**
+- Two counters in `st.session_state`: `tutor_question_count`, `quiz_generation_count`
+- Caps: 30 tutor questions per session, 4 quiz generations per session (quiz
+  cap covers both the Generate button and the PDF-upload topic-detection call,
+  since both are real paid API calls)
+- Tutor gate checks before the question is added to chat history, so a
+  blocked question never sits unanswered in the conversation
+- Quiz gate checks before each API call (upload and Generate), not just once
+  per session
+- Remaining counts shown in sidebar, live on every rerun
+- Resets on page refresh — no `st.stop()` needed, session state itself resets
 
-```python
-if st.session_state.get("question_count", 0) >= 30:
-    st.warning("Session limit reached. Refresh to start a new session.")
-    st.stop()
-```
-
-**Test:** Hit the limit deliberately. Confirm app stops cleanly. Confirm counter resets on refresh.
+**Test:** Hit both limits deliberately (tested at temporary 5/3 first, then
+set to real 30/4). Confirmed clean warnings, no stray API calls past the cap,
+counters reset on refresh.
 
 ---
 
@@ -200,7 +203,7 @@ Before marking any feature done, run this checklist:
 
 ## GO-LIVE CHECKLIST
 
-- [ ] Sprint 1 complete — model swap + RAG + rate limiting
+- [x] Sprint 1 complete — model swap + RAG + rate limiting
 - [ ] Sprint 2 complete — image upload working on desktop and mobile browser
 - [ ] Tested by Chaitra's own kids for 1 week with no major issues
 - [ ] Case study updated with new features
@@ -250,9 +253,3 @@ pip install streamlit anthropic langchain langchain-anthropic langchain-groq \
 ANTHROPIC_API_KEY=
 GROQ_API_KEY=       # Free at console.groq.com
 ```
-Update ACEIT_PROJECT_INSTRUCTIONS.md — correct the model routing table to:
-- Quiz Easy/Medium/Hard: Groq llama-3.3-70b-versatile (free tier)
-- Quiz HOTS: claude-sonnet-4-6
-- All tutor personas (Archimedes, Shakespeare, Columbus): claude-haiku-4-5
-
-This is the verified state from actual code, not the original plan.

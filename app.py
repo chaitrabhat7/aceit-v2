@@ -15,6 +15,9 @@ groq_client = ChatGroq(
     max_tokens=2000,
     temperature=0.4
 )
+
+TUTOR_QUESTION_LIMIT = 30
+QUIZ_GENERATION_LIMIT = 4
 # NOTE: Groq output has been observed using LaTeX notation (e.g. \frac{24}{36})
 # in question/explanation text. st.markdown won't render this as math unless
 # wrapped in $...$, so it may show as raw backslash text in the quiz UI.
@@ -344,6 +347,10 @@ if "student_answers" not in st.session_state:
     st.session_state.student_answers = {}
 if "rag_index" not in st.session_state:
     st.session_state.rag_index = None
+if "tutor_question_count" not in st.session_state:
+    st.session_state.tutor_question_count = 0
+if "quiz_generation_count" not in st.session_state:
+    st.session_state.quiz_generation_count = 0
 
 
 # ─── Page Config ──────────────────────────────────────────────
@@ -354,6 +361,13 @@ with st.sidebar:
     st.title("🎯 AceIt")
     st.caption("Your CBSE AI Tutor")
     st.divider()
+
+    tutor_left = TUTOR_QUESTION_LIMIT - st.session_state.tutor_question_count
+    quiz_left = QUIZ_GENERATION_LIMIT - st.session_state.quiz_generation_count
+    st.caption(f"💬 Tutor questions left: {tutor_left}/{TUTOR_QUESTION_LIMIT}")
+    st.caption(f"🧠 Quiz generations left: {quiz_left}/{QUIZ_GENERATION_LIMIT}")
+    st.divider()
+
     st.caption("⬆️ Tutor Mode controls only")
 
     selected_bot = st.selectbox("Choose your tutor", list(BOTS.keys()))
@@ -433,8 +447,15 @@ with tutor_tab:
     user_input = st.chat_input(bot["placeholder"])
 
     if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        st.rerun()
+        if st.session_state.tutor_question_count >= TUTOR_QUESTION_LIMIT:
+            st.warning(
+                f"⚠️ Session limit reached ({TUTOR_QUESTION_LIMIT} questions). "
+                "Refresh the page to start a new session."
+            )
+        else:
+            st.session_state.tutor_question_count += 1
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            st.rerun()
 
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         with st.spinner("Thinking..."):
@@ -522,18 +543,25 @@ with quiz_tab:
                     st.error(f"❌ Could not read PDF: {e}")
 
             if quiz_chapter_text:
-                with st.spinner("📖 Reading your document..."):
-                    try:
-                        detected = detect_topic(
-                            quiz_subject, quiz_grade, quiz_chapter_text
-                        )
-                        quiz_topic = detected["detected_topic"]
-                        st.success(
-                            f"📌 Detected: **{detected['detected_topic']}** "
-                            f"— {detected['summary']}"
-                        )
-                    except Exception as e:
-                        st.error(f"❌ Could not detect topic: {e}")
+                if st.session_state.quiz_generation_count >= QUIZ_GENERATION_LIMIT:
+                    st.warning(
+                        f"⚠️ Session limit reached ({QUIZ_GENERATION_LIMIT} quiz generations). "
+                        "Refresh the page to start a new session."
+                    )
+                else:
+                    with st.spinner("📖 Reading your document..."):
+                        try:
+                            st.session_state.quiz_generation_count += 1
+                            detected = detect_topic(
+                                quiz_subject, quiz_grade, quiz_chapter_text
+                            )
+                            quiz_topic = detected["detected_topic"]
+                            st.success(
+                                f"📌 Detected: **{detected['detected_topic']}** "
+                                f"— {detected['summary']}"
+                            )
+                        except Exception as e:
+                            st.error(f"❌ Could not detect topic: {e}")
 
     st.divider()
 
@@ -561,11 +589,17 @@ with quiz_tab:
 
     # ── Generate Button ───────────────────────────────────────
     if st.button("⚡ Generate Quiz", type="primary", key="quiz_generate_btn"):
-        if not quiz_topic:
+        if st.session_state.quiz_generation_count >= QUIZ_GENERATION_LIMIT:
+            st.warning(
+                f"⚠️ Session limit reached ({QUIZ_GENERATION_LIMIT} quiz generations). "
+                "Refresh the page to start a new session."
+            )
+        elif not quiz_topic:
             st.warning("⚠️ Please enter a topic or upload a PDF first.")
         else:
             with st.spinner(f"Generating {num_questions} {quiz_difficulty} questions on '{quiz_topic}'..."):
                 try:
+                    st.session_state.quiz_generation_count += 1
                     questions = generate_quiz(
                         subject=quiz_subject,
                         grade=quiz_grade,
