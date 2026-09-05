@@ -5,6 +5,7 @@ import json
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 import rag
+import vision
 
 load_dotenv()
 
@@ -18,6 +19,11 @@ groq_client = ChatGroq(
 
 TUTOR_QUESTION_LIMIT = 30
 QUIZ_GENERATION_LIMIT = 4
+# Image upload is a quick doubt-clearing path, not a full lesson — deliberately
+# tighter than TUTOR_QUESTION_LIMIT. Covers the upload itself plus follow-up
+# questions while an image is the loaded source; whole-session, like the
+# other two counters (resets only on page refresh, not on chapter switch).
+IMAGE_SESSION_LIMIT = 10
 # NOTE: Groq output has been observed using LaTeX notation (e.g. \frac{24}{36})
 # in question/explanation text. st.markdown won't render this as math unless
 # wrapped in $...$, so it may show as raw backslash text in the quiz UI.
@@ -351,6 +357,10 @@ if "tutor_question_count" not in st.session_state:
     st.session_state.tutor_question_count = 0
 if "quiz_generation_count" not in st.session_state:
     st.session_state.quiz_generation_count = 0
+if "image_session_count" not in st.session_state:
+    st.session_state.image_session_count = 0
+if "loaded_via_image" not in st.session_state:
+    st.session_state.loaded_via_image = False
 
 
 # ─── Page Config ──────────────────────────────────────────────
@@ -364,8 +374,10 @@ with st.sidebar:
 
     tutor_left = TUTOR_QUESTION_LIMIT - st.session_state.tutor_question_count
     quiz_left = QUIZ_GENERATION_LIMIT - st.session_state.quiz_generation_count
+    image_left = IMAGE_SESSION_LIMIT - st.session_state.image_session_count
     st.caption(f"💬 Tutor questions left: {tutor_left}/{TUTOR_QUESTION_LIMIT}")
     st.caption(f"🧠 Quiz generations left: {quiz_left}/{QUIZ_GENERATION_LIMIT}")
+    st.caption(f"🖼️ Quick-image Qs left: {image_left}/{IMAGE_SESSION_LIMIT}")
     st.divider()
 
     st.caption("⬆️ Tutor Mode controls only")
@@ -378,6 +390,7 @@ with st.sidebar:
         st.session_state.chapter_text = ""
         st.session_state.loaded_file = ""
         st.session_state.rag_index = None
+        st.session_state.loaded_via_image = False
         st.session_state.current_bot = selected_bot
 
     bot = BOTS[selected_bot]
@@ -386,12 +399,17 @@ with st.sidebar:
 
     st.divider()
     uploaded_file = st.file_uploader("📄 Upload Chapter (PDF or TXT)", type=["pdf", "txt"])
+    uploaded_image = st.file_uploader(
+        "📷 Upload a pic for quick ask", type=["jpg", "jpeg", "png"]
+    )
+    st.caption("One page for a quick question — use PDF upload above for a full chapter.")
     st.divider()
     if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
         st.session_state.chapter_text = ""
         st.session_state.loaded_file = ""
         st.session_state.rag_index = None
+        st.session_state.loaded_via_image = False
 
 # ─── File Upload Handler ──────────────────────────────────────
 if uploaded_file:
@@ -408,6 +426,7 @@ if uploaded_file:
             except Exception as e:
                 st.error(f"❌ Could not read PDF: {e}")
         st.session_state.loaded_file = uploaded_file.name
+        st.session_state.loaded_via_image = False
 
         with st.spinner("Indexing chapter…"):
             st.session_state.rag_index = rag.build_index(
@@ -419,6 +438,39 @@ if uploaded_file:
                 "Try a text-based PDF or a .txt file."
             )
 
+elif uploaded_image and uploaded_image.name != st.session_state.get("loaded_file"):
+    if st.session_state.image_session_count >= IMAGE_SESSION_LIMIT:
+        st.warning(
+            f"⚠️ Quick-image session limit reached ({IMAGE_SESSION_LIMIT}). "
+            "Refresh the page to start a new session, or upload a PDF chapter instead."
+        )
+    else:
+        with st.spinner("Reading image…"):
+            try:
+                image_text = vision.transcribe_images_to_text([uploaded_image])
+            except vision.TranscriptionTruncatedError as e:
+                st.warning(
+                    "⚠️ Transcription was cut off partway — you can still ask "
+                    "about what was captured, or try a page with less text."
+                )
+                image_text = e.partial_text
+            except Exception as e:
+                st.error(f"❌ Could not read image: {e}")
+                image_text = None
+
+        if image_text:
+            st.session_state.chapter_text = image_text
+            st.session_state.loaded_file = uploaded_image.name
+            st.session_state.loaded_via_image = True
+            st.session_state.image_session_count += 1
+
+            with st.spinner("Indexing page…"):
+                st.session_state.rag_index = rag.build_index(
+                    st.session_state.chapter_text
+                )
+            if st.session_state.rag_index is None:
+                st.warning("⚠️ No readable text found in that image.")
+
 chapter_text = st.session_state.get("chapter_text", "")
 # ─── TABS ─────────────────────────────────────────────────────
 tutor_tab, quiz_tab = st.tabs(["💬 Tutor Mode", "🧠 Quiz Mode"])
@@ -429,10 +481,15 @@ with tutor_tab:
     st.divider()
 
     # Chapter indicator
-    if st.session_state.get("loaded_file"):
+    if st.session_state.get("loaded_via_image"):
+        st.success("🖼️ Answering from the uploaded image")
+    elif st.session_state.get("loaded_file"):
         st.success(f"📖 Answering from: **{st.session_state.loaded_file}**")
     else:
-        st.warning("⚠️ No chapter uploaded — tutor is using general knowledge.")
+        st.info(
+            "💡 No chapter uploaded yet — I'll answer using general knowledge. "
+            "Upload a chapter or a quick photo anytime for more specific help!"
+        )
 
     # Force PDF upload for Columbus
     if selected_bot == "🌍 Social Studies — Columbus" and not st.session_state.get("loaded_file"):
@@ -447,7 +504,17 @@ with tutor_tab:
     user_input = st.chat_input(bot["placeholder"])
 
     if user_input:
-        if st.session_state.tutor_question_count >= TUTOR_QUESTION_LIMIT:
+        if st.session_state.loaded_via_image:
+            if st.session_state.image_session_count >= IMAGE_SESSION_LIMIT:
+                st.warning(
+                    f"⚠️ Quick-image session limit reached ({IMAGE_SESSION_LIMIT} questions). "
+                    "Refresh the page to start a new session, or upload a PDF chapter instead."
+                )
+            else:
+                st.session_state.image_session_count += 1
+                st.session_state.messages.append({"role": "user", "content": user_input})
+                st.rerun()
+        elif st.session_state.tutor_question_count >= TUTOR_QUESTION_LIMIT:
             st.warning(
                 f"⚠️ Session limit reached ({TUTOR_QUESTION_LIMIT} questions). "
                 "Refresh the page to start a new session."

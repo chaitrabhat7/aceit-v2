@@ -30,7 +30,9 @@ This is both a real product and a learning project. Explain before writing.
 Sprint 1A complete — Groq model swap done.
 Sprint 1B complete — RAG for tutor PDF uploads (all three personas).
 Sprint 1C complete — session-level rate limiting.
-Next: Sprint 2 — image upload.
+Sprint 2 complete — image upload. vision.py built and tested (hybrid
+Groq/Haiku transcription), wired into app.py's tutor mode sidebar.
+Next: Sprint 2A — anonymous usage logging, before releasing to the class.
 
 ## What NOT to build yet
 No login/auth, no student database, no admin dashboard, 
@@ -85,3 +87,70 @@ Session-level rate limiting. Live and tested.
   code needed).
 - Tested at temporary low limits (5 tutor / 3 quiz) first to confirm gating
   works end to end, then set to real limits (30 / 4).
+
+## Sprint 2 — complete (Sep 2026)
+Single-image transcription for quick doubt-clearing, feeding the same RAG
+pipeline as PDF upload. Isolated in vision.py — app.py and rag.py only ever
+see its plain-string return, never a provider name.
+
+- Hybrid provider strategy: Groq (qwen/qwen3.8-27b) is the primary path —
+  free, fast, works fine for single-page images. Claude Haiku
+  (claude-haiku-4-5, same model already used for tutor mode) is a fallback,
+  called ONLY when Groq raises TranscriptionTruncatedError. A non-truncation
+  Groq error (e.g. a 429) is NOT caught — it propagates, deliberately not
+  covered by the fallback.
+- Scoped to exactly 1 image per call, not 1-2 — this is for a quick question
+  on one page/section. Multi-page chapter content should go through PDF
+  upload instead. 2 images or an empty list both raise ValueError.
+- Why the fallback exists: Groq's free tier caps output at ~1000 tokens/min
+  account-wide — hit a real 429 during testing on a single dense page.
+  _GROQ_MAX_OUTPUT_TOKENS is kept tight (800) so a truncation is caught
+  quickly rather than burning most of the per-minute budget on a call
+  that's going to come back incomplete anyway. Haiku's cap is 1500 — no
+  comparable ceiling on Anthropic's side for this volume.
+- Tested with 6 scenarios, all passing, using fake clients (no live API
+  calls, no dependency on either provider's account state): normal
+  transcription, Groq-truncates-Haiku-succeeds, both-truncate-error-
+  propagates, 2-image rejection, empty-list rejection, and non-truncation
+  Groq error propagating uncaught with Haiku never invoked.
+- Wired into app.py's tutor-mode sidebar (quiz mode untouched — this was
+  never in scope there). Second file uploader "📷 Upload a pic for quick
+  ask", single image only, sits below the existing PDF/TXT uploader.
+- Deliberately tighter budget: IMAGE_SESSION_LIMIT = 10, a separate
+  whole-session counter (image_session_count) from TUTOR_QUESTION_LIMIT's
+  30 — covers the upload itself plus every follow-up question while an
+  image is the loaded source. loaded_via_image flag tracks which mode is
+  active; switching to a PDF/TXT chapter clears it.
+- Chapter-loaded banner shows "Answering from the uploaded image" instead
+  of a filename when image-sourced; the no-chapter-uploaded message was
+  softened from st.warning to a friendlier st.info.
+- Columbus's "chapter required" gate needed no change — it already checks
+  loaded_file, which the image path also sets, so an image-sourced page
+  satisfies it same as a PDF.
+- Logging (Sprint 2A below) not yet wired in — image uploads and
+  image-mode questions aren't logged yet.
+
+## Sprint 2A — planned: anonymous usage logging (Sep 2026)
+Goal: see how the class of 7 actually uses the tool (which persona, how
+often, PDF vs image upload, what kinds of questions) before deciding
+whether to keep Groq/Haiku as-is or swap providers for cost reasons.
+
+Decisions already made (see chat history for full reasoning):
+- Fully anonymous — no student name, ID, or session identifier captured
+  anywhere in a log entry. This was a deliberate choice given "no student
+  database" above and that students are minors.
+- Storage: local JSONL file via usage_log.py's log_event(action, **fields)
+  — one JSON object per line, module built and manually tested.
+- Each entry: UTC timestamp, an action string (tutor_question,
+  pdf_uploaded, image_uploaded, quiz_generated), plus context fields
+  (persona, subject, difficulty) and, for tutor questions, the full
+  question text — chosen over metadata-only so "what kind of questions are
+  they asking" is actually answerable later.
+- Known caveat: Streamlit Community Cloud's filesystem is not guaranteed
+  persistent across redeploys/restarts. Treat usage_log.jsonl as something
+  to check/export before pushing any code change, not a durable store.
+  Open question, not yet decided: whether to add an in-app "download log"
+  button as mitigation.
+- Not yet wired into app.py. Wiring means a log_event() call at: each of
+  the 3 personas' question-send path, PDF upload, image upload (once
+  vision.py is also wired in), and quiz generation.
