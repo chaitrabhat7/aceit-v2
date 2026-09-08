@@ -12,6 +12,7 @@ PDF upload instead.
 """
 
 import base64
+import logging
 import os
 
 from dotenv import load_dotenv
@@ -24,6 +25,8 @@ import anthropic
 # app.py imports vision before calling its own load_dotenv(), the API keys
 # below would read as None. Calling it again here is harmless either way.
 load_dotenv()
+
+_log = logging.getLogger(__name__)
 
 _GROQ_MODEL = "qwen/qwen3.8-27b"
 _HAIKU_MODEL = "claude-haiku-4-5"  # same model app.py uses for tutor mode
@@ -131,7 +134,11 @@ def transcribe_images_to_text(images):
     mime_type = getattr(image_file, "type", None) or "image/jpeg"
     raw_bytes = image_file.read()
     encoded_image = base64.b64encode(raw_bytes).decode("utf-8")
-    print(f"[vision] raw={len(raw_bytes)}B base64={len(encoded_image)}B ({len(encoded_image)/1_048_576:.2f} MiB) mime={mime_type}")
+    _log.warning(
+        "[vision] raw=%dB base64=%dB (%.2f MiB) mime=%s",
+        len(raw_bytes), len(encoded_image),
+        len(encoded_image) / 1_048_576, mime_type,
+    )
 
     try:
         return _transcribe_with_groq(mime_type, encoded_image)
