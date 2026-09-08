@@ -13,7 +13,6 @@ PDF upload instead.
 
 import base64
 import io
-import logging
 import os
 
 from dotenv import load_dotenv
@@ -27,8 +26,6 @@ import anthropic
 # app.py imports vision before calling its own load_dotenv(), the API keys
 # below would read as None. Calling it again here is harmless either way.
 load_dotenv()
-
-_log = logging.getLogger(__name__)
 
 _GROQ_MODEL = "qwen/qwen3.8-27b"
 _HAIKU_MODEL = "claude-haiku-4-5"  # same model app.py uses for tutor mode
@@ -143,9 +140,10 @@ def transcribe_images_to_text(images):
     """Transcribe exactly one page image into text.
 
     `images` must be a list containing exactly 1 file-like object (e.g. a
-    Streamlit UploadedFile) supporting .read() and, optionally, .type for
-    MIME detection. Two-page uploads are out of scope — use PDF upload
-    for multi-page chapter content.
+    Streamlit UploadedFile) supporting .read(). The image is downscaled and
+    re-encoded as JPEG before sending, so any uploaded format works and the
+    payload stays under the upstream request-size cap. Two-page uploads are
+    out of scope — use PDF upload for multi-page chapter content.
 
     Tries Groq (qwen/qwen3.8-27b) first. If Groq's output cap truncates
     the transcription, retries once with Claude Haiku. Returns a plain
@@ -160,11 +158,6 @@ def transcribe_images_to_text(images):
     jpeg_bytes = _downscale_to_jpeg(raw_bytes)
     mime_type = "image/jpeg"
     encoded_image = base64.b64encode(jpeg_bytes).decode("utf-8")
-    _log.warning(
-        "[vision] raw=%dB resized=%dB base64=%dB (%.2f MiB) mime=%s",
-        len(raw_bytes), len(jpeg_bytes), len(encoded_image),
-        len(encoded_image) / 1_048_576, mime_type,
-    )
 
     try:
         return _transcribe_with_groq(mime_type, encoded_image)

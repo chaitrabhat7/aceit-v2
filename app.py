@@ -447,10 +447,6 @@ elif uploaded_image and uploaded_image.name != st.session_state.get("loaded_file
     else:
         with st.spinner("Reading image…"):
             try:
-                st.info(
-                    f"🐞 debug: raw image = {uploaded_image.size} B "
-                    f"({uploaded_image.size / 1_048_576:.2f} MiB), type = {uploaded_image.type}"
-                )
                 image_text = vision.transcribe_images_to_text([uploaded_image])
             except vision.TranscriptionTruncatedError as e:
                 st.warning(
