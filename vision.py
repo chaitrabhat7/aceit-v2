@@ -12,12 +12,14 @@ PDF upload instead.
 """
 
 import base64
+import io
 import logging
 import os
 
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
+from PIL import Image, ImageOps
 import anthropic
 
 # Load .env directly rather than relying on whoever imports this module to
@@ -36,6 +38,14 @@ _HAIKU_MODEL = "claude-haiku-4-5"  # same model app.py uses for tutor mode
 # is caught before burning most of the per-minute budget on a call that
 # was going to come back incomplete anyway.
 _GROQ_MAX_OUTPUT_TOKENS = 800
+
+# A phone photo of a page can be ~8 MB / 4000px on the long edge; base64 of
+# that (~10 MiB) trips an upstream request-size cap before it ever reaches
+# the model. Capping the long edge at 1568px (Anthropic's recommended vision
+# size) and re-encoding as JPEG q85 brings a typical page photo well under
+# 1 MiB with no readable loss of text.
+_MAX_EDGE_PX = 1568
+_JPEG_QUALITY = 85
 
 # Haiku is the fallback path — give it enough room that it doesn't also
 # truncate on the same page that just defeated Groq.
@@ -114,6 +124,21 @@ def _transcribe_with_haiku(mime_type, encoded_image):
     return text
 
 
+def _downscale_to_jpeg(raw_bytes):
+    """Shrink an uploaded image so its base64 payload clears the upstream
+    request-size cap. Always returns JPEG bytes, so the caller's MIME type
+    becomes image/jpeg regardless of what was uploaded.
+    """
+    img = Image.open(io.BytesIO(raw_bytes))
+    img = ImageOps.exif_transpose(img)  # honour phone rotation before we drop EXIF
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")  # JPEG has no alpha/palette
+    img.thumbnail((_MAX_EDGE_PX, _MAX_EDGE_PX), Image.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
+    return out.getvalue()
+
+
 def transcribe_images_to_text(images):
     """Transcribe exactly one page image into text.
 
@@ -131,12 +156,13 @@ def transcribe_images_to_text(images):
         raise ValueError("transcribe_images_to_text accepts exactly 1 image")
 
     image_file = images[0]
-    mime_type = getattr(image_file, "type", None) or "image/jpeg"
     raw_bytes = image_file.read()
-    encoded_image = base64.b64encode(raw_bytes).decode("utf-8")
+    jpeg_bytes = _downscale_to_jpeg(raw_bytes)
+    mime_type = "image/jpeg"
+    encoded_image = base64.b64encode(jpeg_bytes).decode("utf-8")
     _log.warning(
-        "[vision] raw=%dB base64=%dB (%.2f MiB) mime=%s",
-        len(raw_bytes), len(encoded_image),
+        "[vision] raw=%dB resized=%dB base64=%dB (%.2f MiB) mime=%s",
+        len(raw_bytes), len(jpeg_bytes), len(encoded_image),
         len(encoded_image) / 1_048_576, mime_type,
     )
 
