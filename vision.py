@@ -129,7 +129,9 @@ def transcribe_images_to_text(images):
 
     image_file = images[0]
     mime_type = getattr(image_file, "type", None) or "image/jpeg"
-    encoded_image = base64.b64encode(image_file.read()).decode("utf-8")
+    raw_bytes = image_file.read()
+    encoded_image = base64.b64encode(raw_bytes).decode("utf-8")
+    print(f"[vision] raw={len(raw_bytes)}B base64={len(encoded_image)}B ({len(encoded_image)/1_048_576:.2f} MiB) mime={mime_type}")
 
     try:
         return _transcribe_with_groq(mime_type, encoded_image)
