@@ -2,6 +2,7 @@ import streamlit as st
 import anthropic
 import os
 import json
+import hashlib
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 import rag
@@ -19,6 +20,10 @@ groq_client = ChatGroq(
 
 TUTOR_QUESTION_LIMIT = 30
 QUIZ_GENERATION_LIMIT = 4
+# A real 24-page NCERT chapter extracts to ~44K chars. Above this an upload is
+# treated as more than one chapter — fall back to retrieval instead of sending
+# the whole thing.
+OVERSIZE_CHARS = 80_000
 # Image upload is a quick doubt-clearing path, not a full lesson — deliberately
 # tighter than TUTOR_QUESTION_LIMIT. Covers the upload itself plus follow-up
 # questions while an image is the loaded source; whole-session, like the
@@ -353,6 +358,8 @@ if "student_answers" not in st.session_state:
     st.session_state.student_answers = {}
 if "rag_index" not in st.session_state:
     st.session_state.rag_index = None
+if "chapter_oversized" not in st.session_state:
+    st.session_state.chapter_oversized = False
 if "tutor_question_count" not in st.session_state:
     st.session_state.tutor_question_count = 0
 if "quiz_generation_count" not in st.session_state:
@@ -361,6 +368,8 @@ if "image_session_count" not in st.session_state:
     st.session_state.image_session_count = 0
 if "loaded_via_image" not in st.session_state:
     st.session_state.loaded_via_image = False
+if "loaded_sig" not in st.session_state:
+    st.session_state.loaded_sig = ""
 
 
 # ─── Page Config ──────────────────────────────────────────────
@@ -389,8 +398,10 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.chapter_text = ""
         st.session_state.loaded_file = ""
+        st.session_state.loaded_sig = ""
         st.session_state.rag_index = None
         st.session_state.loaded_via_image = False
+        st.session_state.chapter_oversized = False
         st.session_state.current_bot = selected_bot
 
     bot = BOTS[selected_bot]
@@ -408,35 +419,48 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.chapter_text = ""
         st.session_state.loaded_file = ""
+        st.session_state.loaded_sig = ""
         st.session_state.rag_index = None
         st.session_state.loaded_via_image = False
+        st.session_state.chapter_oversized = False
 
 # ─── File Upload Handler ──────────────────────────────────────
 if uploaded_file:
-    if uploaded_file.name != st.session_state.get("loaded_file"):
+    file_sig = hashlib.md5(uploaded_file.getvalue()).hexdigest()
+    if file_sig != st.session_state.get("loaded_sig"):
+        uploaded_file.seek(0)
         if uploaded_file.type == "text/plain":
             st.session_state.chapter_text = uploaded_file.read().decode("utf-8")
         elif uploaded_file.type == "application/pdf":
             try:
                 import PyPDF2
                 pdf_reader = PyPDF2.PdfReader(uploaded_file)
-                st.session_state.chapter_text = ""
-                for page in pdf_reader.pages:
-                    st.session_state.chapter_text += page.extract_text()
+                raw_pages = [p.extract_text() or "" for p in pdf_reader.pages]
+                st.session_state.chapter_text = rag.clean_pdf_text("\n".join(raw_pages))
             except Exception as e:
                 st.error(f"❌ Could not read PDF: {e}")
         st.session_state.loaded_file = uploaded_file.name
+        st.session_state.loaded_sig = file_sig
         st.session_state.loaded_via_image = False
 
-        with st.spinner("Indexing chapter…"):
-            st.session_state.rag_index = rag.build_index(
-                st.session_state.chapter_text
-            )
-        if st.session_state.rag_index is None:
+        chapter_now = st.session_state.get("chapter_text", "")
+        st.session_state.chapter_oversized = len(chapter_now) > OVERSIZE_CHARS
+
+        if not chapter_now.strip():
+            st.session_state.rag_index = None
             st.warning(
                 "⚠️ No readable text found — a scanned/image PDF won't work. "
                 "Try a text-based PDF or a .txt file."
             )
+        elif st.session_state.chapter_oversized:
+            with st.spinner("Large upload — indexing…"):
+                st.session_state.rag_index = rag.build_index(chapter_now)
+            st.info(
+                "📚 This looks like more than one chapter — I'll use the most "
+                "relevant sections. Upload a single chapter for the best results."
+            )
+        else:
+            st.session_state.rag_index = None
 
 elif uploaded_image and uploaded_image.name != st.session_state.get("loaded_file"):
     if st.session_state.image_session_count >= IMAGE_SESSION_LIMIT:
@@ -461,6 +485,7 @@ elif uploaded_image and uploaded_image.name != st.session_state.get("loaded_file
         if image_text:
             st.session_state.chapter_text = image_text
             st.session_state.loaded_file = uploaded_image.name
+            st.session_state.loaded_sig = "image:" + uploaded_image.name
             st.session_state.loaded_via_image = True
             st.session_state.image_session_count += 1
 
@@ -535,17 +560,40 @@ with tutor_tab:
                 context = chapter_text
 
             if context:
-                active_system = bot["prompt"] + f"\n\nStudent is in {grade}. Answer STRICTLY from uploaded chapter: '{st.session_state.loaded_file}'.\nContent:\n{context}"
+                # One system block, whole chapter, 1-hour cache marker.
+                # Q1 writes the cache; later questions read it at ~10%.
+                active_system = [{
+                    "type": "text",
+                    "text": bot["prompt"] + f"\n\nStudent is in {grade}. Answer STRICTLY from the uploaded chapter.\n\nContent:\n{context}",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                }]
             else:
                 active_system = bot["prompt"] + f"\n\nStudent is in {grade}. Use general NCERT knowledge."
+
+            # Cache the conversation prefix too — marker on the newest turn.
+            msgs = st.session_state.messages
+            if len(msgs) > 1:
+                msgs = msgs[:-1] + [{
+                    "role": msgs[-1]["role"],
+                    "content": [{
+                        "type": "text",
+                        "text": msgs[-1]["content"],
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }],
+                }]
 
             response = client.messages.create(
                 model="claude-haiku-4-5",
                 max_tokens=1500,
                 system=active_system,
-                messages=st.session_state.messages
+                messages=msgs,
             )
             reply = response.content[0].text
+
+            u = response.usage
+            print(f"[cache] write={getattr(u, 'cache_creation_input_tokens', 0)} "
+                  f"read={getattr(u, 'cache_read_input_tokens', 0)} "
+                  f"uncached_in={u.input_tokens} out={u.output_tokens}")
 
         st.session_state.messages.append({"role": "assistant", "content": reply})
         st.rerun()

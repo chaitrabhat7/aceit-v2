@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 chroma_db/
 *.sqlite3
+
+# Google Cloud Vision credentials — never commit
+.streamlit/secrets.toml
+*service-account*.json
+gcp-*.json

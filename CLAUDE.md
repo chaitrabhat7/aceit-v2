@@ -14,6 +14,10 @@ This is both a real product and a learning project. Explain before writing.
 - Easy / Medium / Hard quiz: Groq openai/gpt-oss-120b (free tier)
 - HOTS quiz: Claude Sonnet only — never swap this to Groq
 - All tutor mode personas: Claude Haiku (claude-haiku-4-5) only
+- Chapter / photo OCR (Sprint 2B): Google Cloud Vision DOCUMENT_TEXT_DETECTION
+  — pure OCR, replaces the Groq/Haiku image transcription that was in
+  vision.py. Chosen Sep 2026: 1,000 pages/month free covers the class,
+  <200ms/page, batch API, no hallucination. See Sprint 2B.
 
 ## Personas — DO NOT modify system prompts without asking
 - Archimedes: CBSE Maths tutor, intuition before formula
@@ -32,7 +36,13 @@ Sprint 1B complete — RAG for tutor PDF uploads (all three personas).
 Sprint 1C complete — session-level rate limiting.
 Sprint 2 complete — image upload. vision.py built and tested (hybrid
 Groq/Haiku transcription), wired into app.py's tutor mode sidebar.
-Next: Sprint 2A — anonymous usage logging, before releasing to the class.
+Live-tested with a Class 7 student Sep 2026, plus a Class 9-10 user report —
+five follow-up problems found (F1-F5, see "Sprint 2 — live-test findings"
+below). Sprint 2A (logging) is deprioritized behind them.
+Sprint 2B-prime (F5 + F4) — DONE, pending commit: whole chapter in context,
+top-k RAG dropped for single chapters, 1-hour prompt cache.
+Next: Sprint 2B (F1, photo upload) -> Sprint 2D (F2 + F3) -> Sprint 2A
+before releasing to the class.
 
 ## What NOT to build yet
 No login/auth, no student database, no admin dashboard, 
@@ -53,6 +63,10 @@ Streamlit Community Cloud 1GB RAM limit.
 
 ## Sprint 1B — complete (Sep 2026)
 RAG for tutor-mode chapter uploads. Live and tested.
+SUPERSEDED Sep 2026 by Sprint 2B-prime for the default path: top-k retrieval
+caused F5 (Columbus saw only ~8-10% of the chapter). Single chapters now go to
+the model whole, prompt-cached. rag.py's chunk/embed/retrieve is kept only for
+the oversized (multi-chapter) fallback.
 
 - Applies to all three personas (Archimedes, Shakespeare, Columbus) via the
   shared upload handler in app.py.
@@ -130,7 +144,407 @@ see its plain-string return, never a provider name.
 - Logging (Sprint 2A below) not yet wired in — image uploads and
   image-mode questions aren't logged yet.
 
+## Sprint 2 patch — downscale image before send (Sep 2026)
+Follow-up fix to the Sprint 2 image path. Patch in the working tree,
+commit pending.
+
+- Problem: a real phone photo of a textbook page is ~6-10 MB and
+  3000-4000px on the long edge. Base64-encoding that produces an ~8-13 MiB
+  string, which trips an upstream request-size cap — the call failed before
+  the image ever reached Groq or Haiku, so the image-upload feature was
+  effectively unusable with an actual camera photo (only small/pre-shrunk
+  images worked). The throwaway "debug: log image payload size" commit
+  (ad4aa53) was chasing this.
+- Fix: new _downscale_to_jpeg() helper in vision.py, called once inside
+  transcribe_images_to_text() before either provider. Opens the upload with
+  Pillow, applies EXIF rotation then drops EXIF, converts to RGB/L, caps the
+  long edge at 1568px (_MAX_EDGE_PX — Anthropic's recommended vision size)
+  via a LANCZOS thumbnail, re-encodes as JPEG q85 (_JPEG_QUALITY),
+  optimize=True. A typical page photo drops to well under 1 MiB with no
+  readable loss of text.
+- Side effect, deliberate: output MIME is now always image/jpeg regardless
+  of upload format, so PNG / HEIC-exported / etc. all go through one path.
+  The debug payload-size print line is removed.
+- Dependency: uses Pillow (pillow==12.3.0, already in requirements.txt via
+  Streamlit's transitive deps — now imported directly).
+- Not changed: Groq-primary / Haiku-fallback logic, the exactly-1-image
+  scope, the token caps, the ValueError guards. Both providers see the same
+  downscaled JPEG.
+
+## Sprint 2 — live-test findings (Sep 2026)
+Reviewed a 1-hour Class 7 revision session on the live app (student + parent
+watching). Four problems surfaced. All are Sprint 2 follow-ups and all block
+the class release, so Sprint 2A (logging) drops to last priority behind them.
+
+- F1 — no whole-chapter path for Classes 7-8. These grades have no official
+  chapter PDF, only the physical textbook. Image upload takes exactly one page
+  (vision.py transcribe_images_to_text hard-raises on >1); a chapter is 6-15
+  pages. So there is no way to give AceIt a full chapter — the core "explain
+  and revise my whole chapter" function. Evidence: student wanted full-chapter
+  revision, had no upload path, typed the chapter from memory.
+- F2 — Columbus trusts student-typed text as the authoritative chapter. When
+  the uploaded source looks thin, Columbus asks the student to type the missing
+  content, then quotes it back as "your chapter states...", builds keyword
+  lists from it, and grades answers against it — against its defining rule.
+  Neither student nor parent is told the source is unverified. Evidence:
+  Columbus rejected the PDF as "fragments," student typed the chapter from
+  memory, the whole hour (including "your chapter clearly states..." claims and
+  a final keyword checklist) ran on that recollection.
+- F3 — Columbus stalls on imperfect / garbled source text. Given disordered or
+  repetitive text it declares the file incomplete and stops, asking for a
+  re-upload, instead of proceeding with the usable content already present.
+  Also sometimes restates uncertain content as confident, tidy fact. Bad-text
+  root cause: PyPDF2 garbles some NCERT fonts (Sprint 1B known issue) and
+  image-only PDFs extract to nothing. Evidence: chapter had real usable content
+  across pages; Columbus called it "fragments" and refused to proceed.
+- F4 — conversation-history cost grows every turn. Every tutor call resends the
+  full accumulated transcript as uncached input (app.py passes
+  messages=st.session_state.messages — no cache_control, no window). Cost
+  scales with session length, the wrong direction for long revision sessions.
+  Evidence: 1-hour / 30-call session cost ~$0.50, ~5.6x the documented
+  ~$0.003/question RAG estimate; bulk attributed to resent history, answer
+  length secondary.
+- F5 — Columbus retrieval is inconsistent and serves content not in the
+  uploaded chapter, even on clean official PDFs. On iest106.pdf (Ch 6
+  "Democracy") across five upload attempts Columbus reported "fragments /
+  partial", cited different non-overlapping snippets each time, surfaced
+  Elections material (Electoral Roll, Representation of the People Act 1951),
+  and once mis-called it "Chapter 7". DIAGNOSTIC (Sep 2026, scratchpad
+  diag_pdf.py): the PDF is a clean SINGLE chapter — 24 pages, 44,089 chars
+  (~11K tokens), 0 empty pages, "Chapter 6" footer on every page, no other
+  chapter present. "Electoral Roll" appears 0 times in the file. So it is NOT
+  a multi-chapter PDF — Columbus was either backfilling from its own civics
+  training (the chapter does discuss elections, so with only 3 thin RAG
+  fragments it could not tell chapter from general knowledge) or serving a
+  stale index from an earlier upload. Source quality is NOT the cause (unlike
+  F3). Root cause: RAG serves only the top-3 800-char chunks per question, in
+  similarity order, query = latest message only -> Columbus sees ~8-10% of the
+  chapter, a different slice each question, and cannot locate the chapter
+  boundary. Reported by a user Sep 2026; hits the Class 9-10 PDF path that
+  works today -> showstopper.
+
+Fix mapping and order (revised Sep 2026):
+- F5 + F4 -> Sprint 2B-prime, URGENT and first — breaks Columbus on the working
+  Class 9-10 PDF path. Whole chapter in context, no top-k retrieval, 1-hour
+  prompt cache. Also removes the retrieval-drift half of F3.
+- F1 -> Sprint 2B — whole-chapter photo upload for Classes 7-8; feeds text into
+  2B-prime's non-RAG path.
+- F2 + remaining F3 (genuine garble) -> Sprint 2D, deferred — Columbus's
+  typed-text workaround is the only path for Classes 7-8 today, so it stays
+  until 2B is tested.
+Execution order 2B-prime -> 2B -> 2D -> 2A. Sprint 2C is folded into 2B-prime
+(prompt caching); an optional history window can wait. Working style unchanged:
+explain first, diffs not rewrites, one function at a time, test after each step.
+
+## Sprint 2B-prime — Whole-chapter context + prompt caching (Sep 2026, DONE — pending commit)
+Fixes F5 (retrieval serves fragments / wrong-chapter content even on clean
+PDFs) and F4 (history cost), and removes the retrieval-drift half of F3.
+Bumped ahead of Sprint 2B because it breaks Columbus on the Class 9-10 PDF
+path — the one that works today.
+
+STATUS (Sep 2026): steps 0-3 done and live-tested on iest106.pdf. Columbus now
+teaches the whole chapter — complete, consistent, correct chapter, no
+Electoral-Roll / RPA / "Chapter 7" hallucination (test transcript saved to
+OneDrive usage-logs). Cache confirmed: Q1 write=10074 read=0 (~$0.03),
+Q2 write=1469 read=10074 (~$0.01) — chapter served from cache at ~10%.
+Step 4 (reading-order retrieve + k=12 for oversized uploads) SKIPPED — not
+supporting multi-chapter uploads for now; the oversized branch stays as
+degraded-but-warned (k=3 + "upload a single chapter" notice). Steps 5-6 were
+folded into step 2 / covered by the test transcript.
+Watch-item: max_tokens=1500 is borderline for "summarise the whole chapter"
+asks — one test hit out=1500 (truncated). Revisit if students hit it.
+The [cache] print in app.py's answer block is a monitoring probe — keep or
+drop as wanted.
+
+### Why (root cause of F5)
+Sprint 1B's RAG sends Columbus only the top-3 800-char chunks per question
+(~2,400 chars), joined in similarity order not reading order, with the query =
+the latest user message only. An NCERT chapter is 25,000-35,000 chars / 30+
+chunks, so Columbus never sees more than ~8-10% of it, a different slice each
+question. That alone produces every F5 symptom: "fragments" on clean text,
+non-overlapping citations between attempts, "can't say what is between X and
+Y", asking the student for section headings, latching onto a cross-reference
+to mis-call the chapter number. RAG was built to cut cost for factual lookups;
+it is the wrong tool for "teach me this whole chapter".
+
+### The fix
+For a normal-sized chapter, stop retrieving. Put the WHOLE chapter text in the
+tutor's context every question, and cache it so cost stays at RAG levels.
+- Prompt caching (Anthropic, 1-hour extended TTL): the [persona + chapter]
+  block is a stable prefix -> cached. Q1 pays a one-time cache write (~2x base
+  on ~8-9K tokens, ~Rs 1.4); Q2+ read it at ~10% price (~Rs 0.07). Expected
+  ~$0.13 / 30-question session vs the measured ~$0.50 today.
+- 1-hour TTL not 5-minute: a student pauses >5 min often (reading the page,
+  thinking); the 5-min cache would re-charge the write on each pause.
+- Cost is flat-to-cheaper vs today AND the tutor sees the whole chapter in
+  order every question. Full cost table + caching caveats: chat, Sep 2026.
+
+### Usage model (confirmed Sep 2026)
+AceIt is a subject-doubt tutor, not a revision drill. Disengaged student =
+uploads, asks 1-2 questions, leaves = few calls = cheap regardless of caching.
+Engaged student = 20+ min back-and-forth = many calls = caching amortises the
+one write. No usage pattern blows cost up.
+
+### Scope
+- Tutor mode only (all three personas get the whole-chapter context; Columbus
+  is where F5 bit).
+- NO Columbus / persona prompt changes (that is 2D).
+- Quiz mode untouched.
+- rag.py is KEPT but demoted to an oversized-upload fallback (whole-textbook
+  PDFs). Not deleted, not the default path anymore.
+
+### Decisions (locked Sep 2026)
+- 1-hour cache TTL via the extended-cache-ttl beta header.
+- Size threshold: OVERSIZE_CHARS ~= 80,000 chars of extracted text (~20K
+  tokens). Calibration: a real 24-page NCERT chapter (iest106.pdf) is 44K
+  chars / ~11K tokens, so a big single chapter stays well under. Under ->
+  whole chapter, no retrieval. Over -> RAG fallback with k ~= 12 and a
+  one-time st.info "this looks like more than one chapter — upload just the
+  chapter you need for best results".
+- Light PDF-text cleanup before it becomes chapter_text: strip InDesign
+  print-production footer lines (regex like r"^.*\.indd\s+\d+.*$") and
+  standalone page-number lines. PyPDF2 splices these mid-sentence on every
+  NCERT page (~700 chars of noise in iest106.pdf) — removing them helps both
+  the "fragments" feel and cache-block cleanliness. New helper, e.g.
+  rag.clean_pdf_text(raw) or inline in the upload handler.
+- Cached prefix must be byte-stable. Order: [persona prompt (static)] then
+  [chapter text (static per upload)] then the cache breakpoint, then the
+  conversation messages. The uploaded filename stays OUT of the cached block
+  (small uncached lead-in) so a re-upload under a different name still hits.
+- Re-upload staleness: today app.py reloads only when uploaded_file.name
+  changes, so a same-named replaced/edited file is silently ignored. Switch
+  the guard to a content hash of the extracted text.
+
+### Changes, file by file
+rag.py:
+- No public API change. Still chunk_text -> embed_texts -> build_index ->
+  retrieve -> format_context. Used now only by the oversized fallback.
+- retrieve(): return the k chunks in READING ORDER (original chunk index),
+  not similarity order. Default k stays 3 for other callers; the tutor
+  fallback passes k=12.
+- build_index() only called when the upload is oversized.
+
+app.py — upload handler (~L415-439):
+- Extract raw text as today, then run the light PDF cleanup (strip .indd
+  footers + bare page numbers) -> chapter_text.
+- chapter_hash = hash of chapter_text; reload only when the hash changes
+  (replaces the name-only check).
+- chapter_oversized = len(chapter_text) > OVERSIZE_CHARS. Build rag_index
+  only when oversized; otherwise leave rag_index None.
+
+app.py — the answer block (~L527-551):
+- context: chapter_oversized -> rag.format_context(rag.retrieve(index, query,
+  k=12)); else -> the full chapter_text.
+- system becomes a list of blocks:
+  [ {type:text, text: persona + "Student is in <grade>. Answer only from the
+     uploaded material below."},
+    {type:text, text: "=== UPLOADED CHAPTER ===\n"+context+"\n=== END ===",
+     cache_control: {type: ephemeral, ttl: "1h"}} ]
+- client.messages.create(model=haiku, system=<blocks>, messages=<history>,
+  + the 1h-TTL beta header). Exact SDK call for anthropic==0.120.2 confirmed
+  against the claude-api skill / installed SDK before coding.
+- Optional second cache breakpoint on the conversation history — covers the
+  rest of F4. Decide during build whether to include it here.
+
+app.py — session state:
+- Add chapter_hash, chapter_oversized. rag_index kept (now conditional).
+- Update the bot-switch and Clear-Chat resets for the new keys.
+
+### Build order (each step = explain -> diff -> test)
+0. Diagnostic — DONE Sep 2026 (scratchpad diag_pdf.py). iest106.pdf is a clean
+   single chapter, ~11K tokens, "Electoral Roll" absent -> F5 is RAG
+   fragmentation + boundary-backfill, not a multi-chapter file.
+1. DONE. rag.clean_pdf_text() (strips .indd footers + trailing page numbers);
+   app.py sends the whole cleaned chapter (rag_index built only when
+   len > OVERSIZE_CHARS=80_000, else None -> answer block's existing `else`
+   sends full chapter_text). New session key chapter_oversized + resets.
+2. DONE. app.py answer block: `if context` system is now a 1-block list with
+   cache_control {ephemeral, ttl 1h} (no beta header on anthropic==0.120.2).
+   Filename removed from the instruction line (cache invalidator on re-upload;
+   not load-bearing). Second cache breakpoint on messages[-1] for the history
+   prefix. [cache] usage line printed per call.
+3. DONE. app.py: hashlib.md5(uploaded_file.getvalue()) fingerprint replaces the
+   name-only reload check (new key loaded_sig; image path sets "image:<name>").
+   A same-named replaced file now reloads.
+4. SKIPPED — not supporting multi-chapter for now (see STATUS above).
+5. DONE in step 2 (messages[-1] cache breakpoint).
+6. DONE — validated by the iest106.pdf test transcript.
+
+### Acceptance test
+- Clean NCERT chapter PDF: the tutor lists the chapter's real section
+  structure, the same way across 5 repeated attempts, never says "fragments",
+  never cites another chapter, never asks the student for headings.
+- Anthropic console: Q1 cache-write, Q2+ cache-read; ~30-question session near
+  ~$0.13 not ~$0.50.
+- Oversized upload (whole textbook): one-time warning, app still answers.
+- Re-upload a same-named edited file: new content used.
+
+### Not in this sprint
+- Columbus / persona prompt changes (2D: F2 source-lock, F3 genuine-garble).
+- Photo upload (2B) — sequenced AFTER 2B-prime, feeds text into this path.
+
+## Sprint 2B — Whole-chapter photo upload (planned, Sep 2026)
+Goal: a Classes 7-8 student (no official chapter PDF, physical textbook only)
+can photograph a full chapter — 6-15 pages — and upload it as one set. The
+OCR'd page text then feeds the same path as a PDF chapter (Sprint 2B-prime:
+full-context, or oversized fallback). Fixes F1.
+
+Sequencing: runs after Sprint 2B-prime (which is urgent — it fixes the broken
+Class 9-10 PDF path). 2B is still ahead of 2D because F1 has no workaround for
+Classes 7-8, and because F2 (Columbus asking the student to type the chapter)
+is currently their ONLY path — it stays untouched until 2B is tested. During
+2B testing, Columbus's typed-text behaviour is the deliberate safety net.
+
+Scope: tutor mode only. The single-image "quick ask" path is REMOVED and folded
+in — one uploader, one function handles 1..N images (1 image is just N=1). The
+OCR'd page text feeds the SAME path a PDF chapter does (2B-prime decides
+full-context vs oversized fallback) — no separate RAG handling. NO Columbus
+prompt changes here (that is 2D). Quiz mode untouched.
+
+Provider: Google Cloud Vision DOCUMENT_TEXT_DETECTION (locked Sep 2026).
+- Auth: service-account JSON in st.secrets["gcp_service_account"]. Key created,
+  Vision API enabled, billing + budget alert set. google-cloud-vision==3.15.0
+  added to requirements.txt (also normalised that file from UTF-16 to UTF-8);
+  verified it coexists with fastembed (shared protobuf 7.35.1 / grpcio, no
+  conflict, pip check clean). Local credential test passed.
+- Batch: client.batch_annotate_images, <=16 images/request, so a <=20-photo
+  chapter is 1-2 calls, ~1-2s total. No per-page rate-limit handling needed.
+- Text-only (Option A): no figure/diagram descriptions. OCR still captures
+  figure captions and labels. transcribe function returns text PER PAGE (a
+  list, not one blob) so a later VLM figure-description pass (Option B) can be
+  slotted in without restructuring.
+
+Decisions (locked Sep 2026):
+- Photo cap: 20 images (a spread photo = 2 book pages; 20 covers either
+  shooting style). Module constant, easy to retune.
+- One merged uploader: PDF / TXT / one-to-many images. A mixed PDF+images
+  upload is rejected with a short message.
+- Page order = upload order. Caveat: Streamlit's multi-file uploader does not
+  strictly guarantee selection order on every browser — verify in testing;
+  fallback is "name photos 1,2,3 and sort by filename".
+- Chapter-build budget: CHAPTER_BUILD_LIMIT = 3 image-based builds per session
+  (new counter chapter_build_count). PDF/TXT builds stay uncounted, as before.
+  Replaces IMAGE_SESSION_LIMIT / image_session_count.
+- Partial failure: a page Vision can't read is skipped, the rest load, and a
+  one-time build-status st.info names the missing page numbers. Not a
+  per-question warning (the F4 no-nag rule is about per-question cost warnings).
+
+vision.py rewrite:
+- New: transcribe_images(images, credentials_info) -> {"pages": [str,...],
+  "failed": [int,...]}. Builds the Vision client from credentials_info; falls
+  back to GOOGLE_APPLICATION_CREDENTIALS env for local tests.
+- Keep _downscale_to_jpeg (bump long edge to ~1600px for OCR; still well under
+  the batch request-size limit).
+- DELETE: _transcribe_with_groq, _transcribe_with_haiku,
+  TranscriptionTruncatedError, the _GROQ_* / _HAIKU_* constants, the
+  module-level Groq / anthropic clients. The "Sprint 2 patch" downscale note
+  stays valid; the Sprint 2 Groq/Haiku hybrid description becomes historical.
+- New unit tests with a fake Vision client (replace the 6 Groq/Haiku tests):
+  normal multi-image, one-page-in-batch-errors, empty list -> ValueError,
+  N=1 works, missing credentials -> clear error, downscale applied.
+
+Build order (each step is its own explain -> diff -> test cycle):
+1. Secrets: .streamlit/secrets.toml (local) + .gitignore + Streamlit Cloud
+   Edit Secrets. Confirm st.secrets loads.
+2. vision.py: swap transcription internals to Google Vision; new tests; manual
+   smoke test.
+3. app.py: merge the two tutor-mode uploaders into one.
+4. app.py: rewrite the upload handler (pdf/txt | all-images | mixed-reject;
+   images -> downscale -> transcribe_images -> concat in order -> set
+   chapter_text, same as a PDF; surface failed pages once).
+5. app.py: counters + session state (chapter_build_count / loaded_via_photos;
+   drop IMAGE_SESSION_LIMIT; remove the image branches in the user_input
+   block; fix the bot-switch / clear-chat resets).
+6. app.py: photo-source chapter banner.
+7. End-to-end: real 8-12 page Class 7 chapter photos; Columbus full-chapter
+   revision on its current prompt (any F3 stalls are logged for 2D, not fixed
+   here).
+
+Acceptance test: photograph a real 8-12 page Class 7 chapter, upload; every
+page transcribes or partial-fails cleanly; chapter_text is built; Columbus (on
+its current prompt) teaches the whole chapter from it. If Columbus stalls on
+imperfect transcription that is F3 / Sprint 2D, not a 2B failure — record it
+and continue.
+
+## Sprint 2C — Tutor conversation cost control (FOLDED INTO 2B-prime, Sep 2026)
+Status: the prompt-caching core moved into Sprint 2B-prime — caching the
+[persona + chapter] block, plus a second cache breakpoint on the conversation
+history, covers F4. What may remain as a small later pass: an optional history
+window (last N turns) as a backstop for the rare >1-hour cache miss, plus a
+brevity / max_tokens trim. Not scheduled separately unless 2B-prime's
+measurements show it is needed. Original plan kept below for reference.
+
+Goal: a long revision session stops costing multiples of the estimate, with
+zero change to what the student sees or does. Fixes F4.
+
+Hard constraints (Chaitra, Sep 2026):
+- The student uses voice input and gives long, verbose answers during revision.
+  That is expected and fine. Do NOT block, truncate, or shorten student input.
+- Do NOT show the student any warning, notice, or nudge about message length or
+  cost. All handling is invisible.
+- The app absorbs verbose input without large cost overruns.
+
+Approach (all invisible to the student):
+- Prompt caching: mark the message history with cache_control so every re-sent
+  turn bills at cache-read rate (~10% of input) instead of full price. Main
+  lever — directly attacks "whole transcript resent every call." Use the
+  1-hour cache TTL (beta header); the default 5-min TTL would expire during a
+  student's thinking pauses.
+- History window: send only the last N turns to the API (proposal: last ~20,
+  or first turn + last ~18 so the session framing survives). Silent — the
+  student still sees the full chat in the UI; only the request is trimmed.
+  Caps the worst case even when the cache expires.
+- Retrieve RAG context only on question turns, not on every message. A verbose
+  answer turn is a poor retrieval query and currently triggers an embed call
+  plus a fresh, cache-busting context block. Skipping it on answer turns cuts
+  embed calls and lets the system block stay cacheable.
+- Minor: a brevity instruction for Columbus's own replies + a small max_tokens
+  trim (currently 1500). Assistant-side only; output length is a secondary
+  factor per the evidence.
+
+Explicitly NOT doing: summarising or compressing old turns (adds a call, risks
+dropping detail the tutor needs to grade an answer); truncating student input.
+
+Open decisions:
+- Ship caching + window + retrieval-on-questions-only together, or caching
+  first and measure?
+- Window size N, and whether to pin the first turn.
+- How to tell a question turn from an answer turn for the retrieval skip.
+
+Acceptance test: scripted ~20-turn session with deliberately long (200+ word)
+answer turns; console token cost compared before/after (target: at or below
+the ~$0.09 the RAG estimate implies for 30 calls); Columbus still recalls a
+fact from early in the session; the student-facing UI is byte-for-byte
+unchanged.
+
+## Sprint 2D — Columbus source integrity + graceful degradation (planned, Sep 2026)
+Deferred until 2B is built and tested. Combines F2 and F3 — both are "Columbus
+mishandles weak source text": one invents a source (student-typed text treated
+as authoritative), one rejects a usable one ("fragments, re-upload"). One
+Columbus-prompt hardening pass covers both.
+
+F2: source lock in COLUMBUS_PROMPT (the chapter is only the delimited block in
+the system prompt; chat text is never chapter content; never ask the student
+to type it; never say "your chapter states..." about anything not in the
+block) + a delimited context block in app.py's prompt assembly. Revised per
+the F4 constraints: NO student-facing paste warning and NO input blocking —
+the fix is prompt-only, the app does not police what the student types.
+
+F3: prompt tells Columbus the chapter block may carry OCR/extraction noise, to
+teach from usable content, ask for a re-upload only when there is essentially
+nothing, and to hedge ("the chapter seems to say...") rather than assert when a
+passage is unclear. Optional retrieval robustness (higher k, or low-score
+fallback to raw text).
+
+Also in scope here: guard for image-only PDFs uploaded via the PDF button ->
+detect near-empty extraction, point the student at the photo uploader.
+
+Not started. Full plan when 2B + 2C are done.
+
 ## Sprint 2A — planned: anonymous usage logging (Sep 2026)
+Status: DEPRIORITIZED to after Sprint 2D. The F1-F4 live-test findings above
+take precedence before the tool goes to the class.
+
 Goal: see how the class of 7 actually uses the tool (which persona, how
 often, PDF vs image upload, what kinds of questions) before deciding
 whether to keep Groq/Haiku as-is or swap providers for cost reasons.

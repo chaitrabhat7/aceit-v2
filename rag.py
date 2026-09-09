@@ -44,6 +44,30 @@ def embed_texts(texts):
     return matrix / norms
 
 
+def clean_pdf_text(raw):
+    """Strip InDesign print-production noise PyPDF2 splices into NCERT text.
+
+    NCERT chapter PDFs carry a footer on every page like
+    'Chapter 6.indd  142  18-Jun-26  12:00:45 PM' with the page number on the
+    next line. PyPDF2 pulls these into the text stream mid-sentence, making the
+    chapter read as fragmented. Drop each footer line and the bare page number
+    that trails it.
+    """
+    out = []
+    prev_was_footer = False
+    for line in (raw or "").splitlines():
+        stripped = line.strip()
+        if re.search(r"\.indd\s+\d+", stripped):
+            prev_was_footer = True
+            continue
+        if prev_was_footer and re.fullmatch(r"\d{1,4}", stripped):
+            prev_was_footer = False
+            continue
+        prev_was_footer = False
+        out.append(line)
+    return "\n".join(out)
+
+
 def chunk_text(text, chunk_size=800, overlap=100):
     """Split chapter text into overlapping character windows.
 

@@ -155,6 +155,21 @@ def ask_columbus_with_image(image_bytes: bytes, question: str, client: Anthropic
 
 ---
 
+**2C. Downscale image before send — PATCH (Sep 2026, commit pending)**
+
+**Problem this patch fixes:** A real phone photo of a textbook page is ~6–10 MB and 3000–4000px on the long edge. Base64-encoding it produces an ~8–13 MiB string, which trips an upstream request-size cap — the API call fails *before* the image reaches the model. Result: the image-upload feature worked only with small or pre-shrunk test images and broke on an actual camera photo, which is the whole point of the feature.
+
+**Fix (`vision.py`):** New `_downscale_to_jpeg()` helper, called once in `transcribe_images_to_text()` before either provider:
+- Open upload with Pillow, apply EXIF rotation then drop EXIF
+- Convert to RGB/L, cap long edge at 1568px (Anthropic's recommended vision size) via LANCZOS thumbnail
+- Re-encode as JPEG quality 85, `optimize=True` — typical page photo drops well under 1 MiB, no readable text loss
+- Output MIME is now always `image/jpeg`, so any upload format (PNG, HEIC-exported, etc.) goes through one path
+- Debug payload-size `print` removed
+
+**Note:** The image path actually built is Groq `qwen/qwen3.8-27b` primary + Claude Haiku fallback **transcription** in `vision.py`, feeding the RAG pipeline — not the direct-to-Sonnet vision plan sketched in 2A/2B above. Tutor mode only; quiz-mode image upload (2B) not built. Uses `pillow==12.3.0` (already in `requirements.txt`).
+
+---
+
 ### SPRINT 3 — Voice Input (Nice to Have)
 **Goal:** Student speaks question instead of typing.
 
