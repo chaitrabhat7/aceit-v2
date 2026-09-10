@@ -39,10 +39,12 @@ Groq/Haiku transcription), wired into app.py's tutor mode sidebar.
 Live-tested with a Class 7 student Sep 2026, plus a Class 9-10 user report —
 five follow-up problems found (F1-F5, see "Sprint 2 — live-test findings"
 below). Sprint 2A (logging) is deprioritized behind them.
-Sprint 2B-prime (F5 + F4) — DONE, pending commit: whole chapter in context,
-top-k RAG dropped for single chapters, 1-hour prompt cache.
-Next: Sprint 2B (F1, photo upload) -> Sprint 2D (F2 + F3) -> Sprint 2A
-before releasing to the class.
+Sprint 2B-prime (F5 + F4) — DONE, shipped (commit d38fe61): whole chapter in
+context, top-k RAG dropped for single chapters, 1-hour prompt cache.
+Sprint 2B (F1, photo upload) — DONE, pending commit: Google Vision OCR + page
+images in Haiku's cached context ("Path B"), merged uploader, works for all
+three personas. max_tokens 1500 -> 2500.
+Next: Sprint 2D (F2 + F3) -> Sprint 2A before releasing to the class.
 
 ## What NOT to build yet
 No login/auth, no student database, no admin dashboard, 
@@ -236,7 +238,7 @@ Execution order 2B-prime -> 2B -> 2D -> 2A. Sprint 2C is folded into 2B-prime
 (prompt caching); an optional history window can wait. Working style unchanged:
 explain first, diffs not rewrites, one function at a time, test after each step.
 
-## Sprint 2B-prime — Whole-chapter context + prompt caching (Sep 2026, DONE — pending commit)
+## Sprint 2B-prime — Whole-chapter context + prompt caching (Sep 2026, DONE — commit d38fe61, pushed)
 Fixes F5 (retrieval serves fragments / wrong-chapter content even on clean
 PDFs) and F4 (history cost), and removes the retrieval-drift half of F3.
 Bumped ahead of Sprint 2B because it breaks Columbus on the Class 9-10 PDF
@@ -383,17 +385,43 @@ app.py — session state:
 - Columbus / persona prompt changes (2D: F2 source-lock, F3 genuine-garble).
 - Photo upload (2B) — sequenced AFTER 2B-prime, feeds text into this path.
 
-## Sprint 2B — Whole-chapter photo upload (planned, Sep 2026)
+## Sprint 2B — Whole-chapter photo upload (Sep 2026, DONE — pending commit)
 Goal: a Classes 7-8 student (no official chapter PDF, physical textbook only)
-can photograph a full chapter — 6-15 pages — and upload it as one set. The
-OCR'd page text then feeds the same path as a PDF chapter (Sprint 2B-prime:
-full-context, or oversized fallback). Fixes F1.
+can photograph a full chapter and upload it. Fixes F1. Also serves Archimedes
+and Shakespeare (photograph a problem / an exercise). Live-tested with Columbus
+(soil + seasons tables) and Archimedes (figure-heavy maths chapter) — both
+excellent.
 
-Sequencing: runs after Sprint 2B-prime (which is urgent — it fixes the broken
-Class 9-10 PDF path). 2B is still ahead of 2D because F1 has no workaround for
-Classes 7-8, and because F2 (Columbus asking the student to type the chapter)
-is currently their ONLY path — it stays untouched until 2B is tested. During
-2B testing, Columbus's typed-text behaviour is the deliberate safety net.
+### WHAT SHIPPED — "Path B" (supersedes the text-only plan below)
+Deciding against pure OCR-to-text: on real phone photos, Google Vision
+linearises a 3-column table only ~70% right and a 4-column / merged-cell table
+much worse (the "Months of" seasons table came out scrambled). OCR also gives
+nothing for diagrams, maps, flowcharts. Options B1 (hand-rolled geometry
+reconstruction) and B2 (LLM over block coords) both failed the 4-column case in
+testing. So:
+
+- **OCR text stays** as a cheap fluent-reading layer for prose.
+- **The downscaled page images also go into Haiku's context**, in a cached
+  synthetic priming turn:
+    system   = [ persona + OCR text ]                      cache_control 1h
+    messages = [ user:[img_1..img_N, "my chapter pages"]   cache_control 1h
+                 assistant:"I've looked at the pages."
+                 ...real conversation... ]
+  Haiku reads the actual table / diagram from the image. (Images are NOT
+  allowed in `system` — API rejects them there; they must be in `messages`.)
+- Caching verified in-app: a figure-heavy maths chapter = ~17.7K tokens, Q1
+  `write=17666`, Q2+ `read=17666+`. Cost ~Rs 3 for Q1, ~Rs 0.5/question after.
+- Table accuracy measured 6.5/7 on real photos incl. the merged-cell seasons
+  table; the residual error is region-column bleed on a *rotated* photo — the
+  "hold the phone straight" caption + Sprint 2D hedging cover it.
+- No Mistral, no Document AI. Google Vision + Haiku only, keys already in use.
+- PDF chapters (9-10) unchanged: text only, no page images (no PDF->image
+  render yet). Revisit if PDF tables become a complaint.
+
+Also in this commit: max_tokens 1500 -> 2500 for the tutor call (a
+whole-chapter overview was hitting the 1500 cap and truncating).
+
+### Historical plan (mostly as-built; note the Path B change above)
 
 Scope: tutor mode only. The single-image "quick ask" path is REMOVED and folded
 in — one uploader, one function handles 1..N images (1 image is just N=1). The
@@ -409,10 +437,8 @@ Provider: Google Cloud Vision DOCUMENT_TEXT_DETECTION (locked Sep 2026).
   conflict, pip check clean). Local credential test passed.
 - Batch: client.batch_annotate_images, <=16 images/request, so a <=20-photo
   chapter is 1-2 calls, ~1-2s total. No per-page rate-limit handling needed.
-- Text-only (Option A): no figure/diagram descriptions. OCR still captures
-  figure captions and labels. transcribe function returns text PER PAGE (a
-  list, not one blob) so a later VLM figure-description pass (Option B) can be
-  slotted in without restructuring.
+- SUPERSEDED by Path B (see above): text-only was the plan; we now also send
+  the page images. transcribe_images returns pages + jpegs + ocr_failed.
 
 Decisions (locked Sep 2026):
 - Photo cap: 20 images (a spread photo = 2 book pages; 20 covers either
@@ -422,26 +448,30 @@ Decisions (locked Sep 2026):
 - Page order = upload order. Caveat: Streamlit's multi-file uploader does not
   strictly guarantee selection order on every browser — verify in testing;
   fallback is "name photos 1,2,3 and sort by filename".
-- Chapter-build budget: CHAPTER_BUILD_LIMIT = 3 image-based builds per session
-  (new counter chapter_build_count). PDF/TXT builds stay uncounted, as before.
-  Replaces IMAGE_SESSION_LIMIT / image_session_count.
-- Partial failure: a page Vision can't read is skipped, the rest load, and a
-  one-time build-status st.info names the missing page numbers. Not a
-  per-question warning (the F4 no-nag rule is about per-question cost warnings).
+- Chapter-build budget: CHAPTER_BUILD_LIMIT = 8 image-based builds per session
+  (raised from 3 — Archimedes/Shakespeare upload per-problem, not per-chapter;
+  each build is only ~Rs 1-4 of cache write). MAX_PAGE_IMAGES = 20 per upload.
+  New counter chapter_build_count; PDF/TXT builds stay uncounted. Replaces
+  IMAGE_SESSION_LIMIT / image_session_count. A new upload REPLACES the loaded
+  source (images + text); the conversation history stays.
+- Partial failure: a page with no OCR text is kept (image still sent to Haiku);
+  a one-time st.info names those page numbers.
+- Uploader reset: st.file_uploader keeps its own state, so Clear Chat / bot-
+  switch bump st.session_state.uploader_gen, which is in the widget `key`, to
+  force it empty (otherwise the files re-process on the next rerun).
 
-vision.py rewrite:
-- New: transcribe_images(images, credentials_info) -> {"pages": [str,...],
-  "failed": [int,...]}. Builds the Vision client from credentials_info; falls
-  back to GOOGLE_APPLICATION_CREDENTIALS env for local tests.
-- Keep _downscale_to_jpeg (bump long edge to ~1600px for OCR; still well under
-  the batch request-size limit).
-- DELETE: _transcribe_with_groq, _transcribe_with_haiku,
-  TranscriptionTruncatedError, the _GROQ_* / _HAIKU_* constants, the
-  module-level Groq / anthropic clients. The "Sprint 2 patch" downscale note
-  stays valid; the Sprint 2 Groq/Haiku hybrid description becomes historical.
-- New unit tests with a fake Vision client (replace the 6 Groq/Haiku tests):
-  normal multi-image, one-page-in-batch-errors, empty list -> ValueError,
-  N=1 works, missing credentials -> clear error, downscale applied.
+vision.py rewrite (AS BUILT):
+- transcribe_images(images, credentials_info) -> {"pages": [str per image,
+  "" if OCR found nothing], "jpegs": [downscaled JPEG bytes per image],
+  "ocr_failed": [1-based indices]}. Client from credentials_info
+  (st.secrets["gcp_service_account"]); falls back to
+  GOOGLE_APPLICATION_CREDENTIALS for local scripts.
+- _downscale_to_jpeg kept, _MAX_EDGE_PX 1568 -> 1600.
+- DELETED: _transcribe_with_groq/_haiku, TranscriptionTruncatedError, all
+  _GROQ_*/_HAIKU_* constants, module-level Groq/anthropic clients, the
+  langchain/anthropic/base64/os/load_dotenv imports.
+- test_vision.py: plain-script (no pytest), 7 cases with a fake Vision client,
+  all passing.
 
 Build order (each step is its own explain -> diff -> test cycle):
 1. Secrets: .streamlit/secrets.toml (local) + .gitignore + Streamlit Cloud
@@ -467,12 +497,13 @@ imperfect transcription that is F3 / Sprint 2D, not a 2B failure — record it
 and continue.
 
 ## Sprint 2C — Tutor conversation cost control (FOLDED INTO 2B-prime, Sep 2026)
-Status: the prompt-caching core moved into Sprint 2B-prime — caching the
-[persona + chapter] block, plus a second cache breakpoint on the conversation
-history, covers F4. What may remain as a small later pass: an optional history
-window (last N turns) as a backstop for the rare >1-hour cache miss, plus a
-brevity / max_tokens trim. Not scheduled separately unless 2B-prime's
-measurements show it is needed. Original plan kept below for reference.
+Status: DONE via 2B-prime + 2B. Caching the [persona + chapter] block and the
+conversation-history prefix (2B-prime) plus the page-image priming turn (2B)
+covers F4 — sessions measured at ~Rs 0.5/question after Q1. max_tokens bumped
+1500 -> 2500 in the 2B commit (was truncating chapter overviews). What could
+still be added later if measurements demand it: an optional last-N-turns
+history window as a backstop for the rare >1-hour cache miss. Original plan
+kept below for reference.
 
 Goal: a long revision session stops costing multiples of the estimate, with
 zero change to what the student sees or does. Fixes F4.

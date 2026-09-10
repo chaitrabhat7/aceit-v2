@@ -3,6 +3,8 @@ import anthropic
 import os
 import json
 import hashlib
+import io
+import base64
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 import rag
@@ -24,11 +26,12 @@ QUIZ_GENERATION_LIMIT = 4
 # treated as more than one chapter — fall back to retrieval instead of sending
 # the whole thing.
 OVERSIZE_CHARS = 80_000
-# Image upload is a quick doubt-clearing path, not a full lesson — deliberately
-# tighter than TUTOR_QUESTION_LIMIT. Covers the upload itself plus follow-up
-# questions while an image is the loaded source; whole-session, like the
-# other two counters (resets only on page refresh, not on chapter switch).
-IMAGE_SESSION_LIMIT = 10
+# Photo upload (Path B): OCR text + the page images go into the tutor's cached
+# context. MAX_PAGE_IMAGES caps one upload; CHAPTER_BUILD_LIMIT caps separate
+# uploads per session (each writes a fresh cache). Follow-up questions count
+# against TUTOR_QUESTION_LIMIT, not this.
+MAX_PAGE_IMAGES = 20
+CHAPTER_BUILD_LIMIT = 8
 # NOTE: Groq output has been observed using LaTeX notation (e.g. \frac{24}{36})
 # in question/explanation text. st.markdown won't render this as math unless
 # wrapped in $...$, so it may show as raw backslash text in the quiz UI.
@@ -364,12 +367,16 @@ if "tutor_question_count" not in st.session_state:
     st.session_state.tutor_question_count = 0
 if "quiz_generation_count" not in st.session_state:
     st.session_state.quiz_generation_count = 0
-if "image_session_count" not in st.session_state:
-    st.session_state.image_session_count = 0
+if "chapter_build_count" not in st.session_state:
+    st.session_state.chapter_build_count = 0
+if "page_images" not in st.session_state:
+    st.session_state.page_images = []
 if "loaded_via_image" not in st.session_state:
     st.session_state.loaded_via_image = False
 if "loaded_sig" not in st.session_state:
     st.session_state.loaded_sig = ""
+if "uploader_gen" not in st.session_state:
+    st.session_state.uploader_gen = 0
 
 
 # ─── Page Config ──────────────────────────────────────────────
@@ -383,10 +390,10 @@ with st.sidebar:
 
     tutor_left = TUTOR_QUESTION_LIMIT - st.session_state.tutor_question_count
     quiz_left = QUIZ_GENERATION_LIMIT - st.session_state.quiz_generation_count
-    image_left = IMAGE_SESSION_LIMIT - st.session_state.image_session_count
+    builds_left = CHAPTER_BUILD_LIMIT - st.session_state.chapter_build_count
     st.caption(f"💬 Tutor questions left: {tutor_left}/{TUTOR_QUESTION_LIMIT}")
     st.caption(f"🧠 Quiz generations left: {quiz_left}/{QUIZ_GENERATION_LIMIT}")
-    st.caption(f"🖼️ Quick-image Qs left: {image_left}/{IMAGE_SESSION_LIMIT}")
+    st.caption(f"📷 Photo uploads left: {builds_left}/{CHAPTER_BUILD_LIMIT}")
     st.divider()
 
     st.caption("⬆️ Tutor Mode controls only")
@@ -400,8 +407,10 @@ with st.sidebar:
         st.session_state.loaded_file = ""
         st.session_state.loaded_sig = ""
         st.session_state.rag_index = None
+        st.session_state.page_images = []
         st.session_state.loaded_via_image = False
         st.session_state.chapter_oversized = False
+        st.session_state.uploader_gen += 1
         st.session_state.current_bot = selected_bot
 
     bot = BOTS[selected_bot]
@@ -409,11 +418,16 @@ with st.sidebar:
     topic = st.selectbox("Topic", bot["topics"])
 
     st.divider()
-    uploaded_file = st.file_uploader("📄 Upload Chapter (PDF or TXT)", type=["pdf", "txt"])
-    uploaded_image = st.file_uploader(
-        "📷 Upload a pic for quick ask", type=["jpg", "jpeg", "png"]
+    uploaded_files = st.file_uploader(
+        "📄 Upload your chapter — a PDF, or photos of the pages",
+        type=["pdf", "txt", "jpg", "jpeg", "png"],
+        accept_multiple_files=True,
+        key=f"chapter_uploader_{st.session_state.uploader_gen}",
     )
-    st.caption("One page for a quick question — use PDF upload above for a full chapter.")
+    st.caption(
+        "Photos: one page each, book flat, phone straight above, page filling "
+        "the frame — and don't skip pages. Or upload one PDF / TXT."
+    )
     st.divider()
     if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
@@ -421,80 +435,98 @@ with st.sidebar:
         st.session_state.loaded_file = ""
         st.session_state.loaded_sig = ""
         st.session_state.rag_index = None
+        st.session_state.page_images = []
         st.session_state.loaded_via_image = False
         st.session_state.chapter_oversized = False
+        st.session_state.uploader_gen += 1
+        st.rerun()
 
 # ─── File Upload Handler ──────────────────────────────────────
-if uploaded_file:
-    file_sig = hashlib.md5(uploaded_file.getvalue()).hexdigest()
-    if file_sig != st.session_state.get("loaded_sig"):
-        uploaded_file.seek(0)
-        if uploaded_file.type == "text/plain":
-            st.session_state.chapter_text = uploaded_file.read().decode("utf-8")
-        elif uploaded_file.type == "application/pdf":
-            try:
-                import PyPDF2
-                pdf_reader = PyPDF2.PdfReader(uploaded_file)
-                raw_pages = [p.extract_text() or "" for p in pdf_reader.pages]
-                st.session_state.chapter_text = rag.clean_pdf_text("\n".join(raw_pages))
-            except Exception as e:
-                st.error(f"❌ Could not read PDF: {e}")
-        st.session_state.loaded_file = uploaded_file.name
-        st.session_state.loaded_sig = file_sig
-        st.session_state.loaded_via_image = False
+if uploaded_files:
+    sig = hashlib.md5(b"".join(f.getvalue() for f in uploaded_files)).hexdigest()
+    if sig != st.session_state.get("loaded_sig"):
+        docs = [f for f in uploaded_files if f.type in ("application/pdf", "text/plain")]
+        imgs = [f for f in uploaded_files if f.type.startswith("image/")]
 
-        chapter_now = st.session_state.get("chapter_text", "")
-        st.session_state.chapter_oversized = len(chapter_now) > OVERSIZE_CHARS
+        if docs and imgs:
+            st.error("Upload a PDF/TXT chapter **or** page photos — not both at once.")
 
-        if not chapter_now.strip():
-            st.session_state.rag_index = None
-            st.warning(
-                "⚠️ No readable text found — a scanned/image PDF won't work. "
-                "Try a text-based PDF or a .txt file."
-            )
-        elif st.session_state.chapter_oversized:
-            with st.spinner("Large upload — indexing…"):
-                st.session_state.rag_index = rag.build_index(chapter_now)
-            st.info(
-                "📚 This looks like more than one chapter — I'll use the most "
-                "relevant sections. Upload a single chapter for the best results."
-            )
-        else:
-            st.session_state.rag_index = None
+        elif docs:
+            doc = docs[0]
+            doc.seek(0)
+            if doc.type == "text/plain":
+                st.session_state.chapter_text = doc.read().decode("utf-8")
+            else:
+                try:
+                    import PyPDF2
+                    reader = PyPDF2.PdfReader(doc)
+                    raw = "\n".join(p.extract_text() or "" for p in reader.pages)
+                    st.session_state.chapter_text = rag.clean_pdf_text(raw)
+                except Exception as e:
+                    st.error(f"❌ Could not read PDF: {e}")
+            st.session_state.page_images = []
+            st.session_state.loaded_via_image = False
+            st.session_state.loaded_file = doc.name
+            st.session_state.loaded_sig = sig
 
-elif uploaded_image and uploaded_image.name != st.session_state.get("loaded_file"):
-    if st.session_state.image_session_count >= IMAGE_SESSION_LIMIT:
-        st.warning(
-            f"⚠️ Quick-image session limit reached ({IMAGE_SESSION_LIMIT}). "
-            "Refresh the page to start a new session, or upload a PDF chapter instead."
-        )
-    else:
-        with st.spinner("Reading image…"):
-            try:
-                image_text = vision.transcribe_images_to_text([uploaded_image])
-            except vision.TranscriptionTruncatedError as e:
+            chapter_now = st.session_state.get("chapter_text", "")
+            st.session_state.chapter_oversized = len(chapter_now) > OVERSIZE_CHARS
+            if not chapter_now.strip():
+                st.session_state.rag_index = None
                 st.warning(
-                    "⚠️ Transcription was cut off partway — you can still ask "
-                    "about what was captured, or try a page with less text."
+                    "⚠️ No readable text found — a scanned PDF won't work. "
+                    "Upload photos of the pages instead, or a text-based PDF."
                 )
-                image_text = e.partial_text
-            except Exception as e:
-                st.error(f"❌ Could not read image: {e}")
-                image_text = None
-
-        if image_text:
-            st.session_state.chapter_text = image_text
-            st.session_state.loaded_file = uploaded_image.name
-            st.session_state.loaded_sig = "image:" + uploaded_image.name
-            st.session_state.loaded_via_image = True
-            st.session_state.image_session_count += 1
-
-            with st.spinner("Indexing page…"):
-                st.session_state.rag_index = rag.build_index(
-                    st.session_state.chapter_text
+            elif st.session_state.chapter_oversized:
+                with st.spinner("Large upload — indexing…"):
+                    st.session_state.rag_index = rag.build_index(chapter_now)
+                st.info(
+                    "📚 This looks like more than one chapter — I'll use the most "
+                    "relevant sections. Upload a single chapter for the best results."
                 )
-            if st.session_state.rag_index is None:
-                st.warning("⚠️ No readable text found in that image.")
+            else:
+                st.session_state.rag_index = None
+
+        elif imgs:
+            if len(imgs) > MAX_PAGE_IMAGES:
+                st.warning(
+                    f"📷 Max {MAX_PAGE_IMAGES} photos per upload — "
+                    f"using the first {MAX_PAGE_IMAGES}."
+                )
+                imgs = imgs[:MAX_PAGE_IMAGES]
+            if st.session_state.chapter_build_count >= CHAPTER_BUILD_LIMIT:
+                st.warning(
+                    f"⚠️ Upload limit reached ({CHAPTER_BUILD_LIMIT} per session). "
+                    "Refresh the page to start over."
+                )
+            else:
+                plural = "s" if len(imgs) != 1 else ""
+                with st.spinner(f"Reading {len(imgs)} page{plural}…"):
+                    try:
+                        result = vision.transcribe_images(
+                            [io.BytesIO(f.getvalue()) for f in imgs],
+                            credentials_info=st.secrets["gcp_service_account"],
+                        )
+                    except Exception as e:
+                        st.error(f"❌ Could not read the photos: {e}")
+                        result = None
+                if result:
+                    st.session_state.chapter_text = "\n\n".join(
+                        t for t in result["pages"] if t.strip()
+                    )
+                    st.session_state.page_images = result["jpegs"]
+                    st.session_state.rag_index = None
+                    st.session_state.chapter_oversized = False
+                    st.session_state.loaded_via_image = True
+                    st.session_state.loaded_file = f"{len(imgs)} page photo{plural}"
+                    st.session_state.loaded_sig = sig
+                    st.session_state.chapter_build_count += 1
+                    if result["ocr_failed"]:
+                        pages = ", ".join(map(str, result["ocr_failed"]))
+                        st.info(
+                            f"📷 Little readable text on page(s) {pages} — I'll still "
+                            "work from the photo; re-shoot them if answers seem off."
+                        )
 
 chapter_text = st.session_state.get("chapter_text", "")
 # ─── TABS ─────────────────────────────────────────────────────
@@ -507,7 +539,8 @@ with tutor_tab:
 
     # Chapter indicator
     if st.session_state.get("loaded_via_image"):
-        st.success("🖼️ Answering from the uploaded image")
+        n = len(st.session_state.get("page_images", []))
+        st.success(f"📷 Answering from your {n} uploaded page photo" + ("s" if n != 1 else ""))
     elif st.session_state.get("loaded_file"):
         st.success(f"📖 Answering from: **{st.session_state.loaded_file}**")
     else:
@@ -529,17 +562,7 @@ with tutor_tab:
     user_input = st.chat_input(bot["placeholder"])
 
     if user_input:
-        if st.session_state.loaded_via_image:
-            if st.session_state.image_session_count >= IMAGE_SESSION_LIMIT:
-                st.warning(
-                    f"⚠️ Quick-image session limit reached ({IMAGE_SESSION_LIMIT} questions). "
-                    "Refresh the page to start a new session, or upload a PDF chapter instead."
-                )
-            else:
-                st.session_state.image_session_count += 1
-                st.session_state.messages.append({"role": "user", "content": user_input})
-                st.rerun()
-        elif st.session_state.tutor_question_count >= TUTOR_QUESTION_LIMIT:
+        if st.session_state.tutor_question_count >= TUTOR_QUESTION_LIMIT:
             st.warning(
                 f"⚠️ Session limit reached ({TUTOR_QUESTION_LIMIT} questions). "
                 "Refresh the page to start a new session."
@@ -559,16 +582,41 @@ with tutor_tab:
             else:
                 context = chapter_text
 
-            if context:
-                # One system block, whole chapter, 1-hour cache marker.
-                # Q1 writes the cache; later questions read it at ~10%.
+            has_images = bool(st.session_state.get("page_images"))
+            if context or has_images:
+                # One cached system block: persona + OCR text (if any).
+                # Page images ride in a cached priming turn below.
+                body = f"\n\nStudent is in {grade}. Answer STRICTLY from the uploaded chapter."
+                if context:
+                    body += f"\n\nContent:\n{context}"
                 active_system = [{
                     "type": "text",
-                    "text": bot["prompt"] + f"\n\nStudent is in {grade}. Answer STRICTLY from the uploaded chapter.\n\nContent:\n{context}",
+                    "text": bot["prompt"] + body,
                     "cache_control": {"type": "ephemeral", "ttl": "1h"},
                 }]
             else:
                 active_system = bot["prompt"] + f"\n\nStudent is in {grade}. Use general NCERT knowledge."
+
+            # Path B: prime the conversation with the page images, cached 1h.
+            priming = []
+            if has_images:
+                img_content = [
+                    {"type": "image", "source": {
+                        "type": "base64", "media_type": "image/jpeg",
+                        "data": base64.b64encode(b).decode(),
+                    }}
+                    for b in st.session_state.page_images
+                ]
+                img_content.append({
+                    "type": "text",
+                    "text": "These are the pages of my chapter.",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                })
+                priming = [
+                    {"role": "user", "content": img_content},
+                    {"role": "assistant",
+                     "content": "I've looked at the chapter pages. Ask me anything."},
+                ]
 
             # Cache the conversation prefix too — marker on the newest turn.
             msgs = st.session_state.messages
@@ -584,9 +632,9 @@ with tutor_tab:
 
             response = client.messages.create(
                 model="claude-haiku-4-5",
-                max_tokens=1500,
+                max_tokens=2500,
                 system=active_system,
-                messages=msgs,
+                messages=priming + msgs,
             )
             reply = response.content[0].text
 
