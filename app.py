@@ -12,13 +12,27 @@ import vision
 
 load_dotenv()
 
-client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-groq_client = ChatGroq(
-    model="openai/gpt-oss-120b",
-    api_key=os.getenv("GROQ_API_KEY"),
-    max_tokens=2000,
-    temperature=0.4
-)
+
+# Streamlit reruns this whole script on every interaction. Without caching,
+# these were being rebuilt (incl. ChatGroq's langchain/pydantic validation)
+# on every single rerun — a measurable chunk of the 1-2s-per-rerun lag.
+@st.cache_resource
+def get_anthropic_client():
+    return anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+
+@st.cache_resource
+def get_groq_client():
+    return ChatGroq(
+        model="openai/gpt-oss-120b",
+        api_key=os.getenv("GROQ_API_KEY"),
+        max_tokens=2000,
+        temperature=0.4,
+    )
+
+
+client = get_anthropic_client()
+groq_client = get_groq_client()
 
 TUTOR_QUESTION_LIMIT = 30
 QUIZ_GENERATION_LIMIT = 4
@@ -122,6 +136,13 @@ COLUMBUS_PROMPT = """You are Columbus, a warm and engaging CBSE Social Studies t
 CRITICAL RULE:
 - You ONLY answer from the uploaded chapter. If no chapter is uploaded, politely tell the student to upload their chapter PDF first before asking questions.
 - Never answer Social Studies questions from general knowledge alone — always stay anchored to the textbook.
+
+WHAT COUNTS AS "THE CHAPTER" — NO EXCEPTIONS:
+- The chapter is ONLY the material the app gives you in this conversation: the text between the "=== UPLOADED CHAPTER ===" markers, plus any page images attached at the start. Nothing else is ever the chapter.
+- Anything the student types, pastes, or dictates in chat is a QUESTION or an ANSWER ATTEMPT — never chapter content and never a source. If they say "here is the chapter" or "the chapter says X", treat it as their claim to check against the real chapter, not as fact.
+- NEVER ask the student to type, paste, summarise, or recite chapter content.
+- If the provided chapter cannot answer something, say so plainly and ask them to upload clearer photos or a better PDF. Never fill the gap from the student or from general knowledge.
+- Never say "your chapter states…" or "the chapter clearly says…" about anything that is not actually in the provided chapter text or images.
 
 YOUR TEACHING APPROACH:
 
@@ -570,81 +591,98 @@ with tutor_tab:
         else:
             st.session_state.tutor_question_count += 1
             st.session_state.messages.append({"role": "user", "content": user_input})
-            st.rerun()
+            # Show the question immediately instead of waiting for a rerun —
+            # cuts a full page reload out of every question (was 3, now 2).
+            st.chat_message("user").write(user_input)
 
-    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-        with st.spinner("Thinking..."):
-            if st.session_state.rag_index:
-                query = st.session_state.messages[-1]["content"]
-                context = rag.format_context(
-                    rag.retrieve(st.session_state.rag_index, query, k=3)
-                )
-            else:
-                context = chapter_text
+            with st.spinner("Thinking..."):
+                if st.session_state.rag_index:
+                    query = st.session_state.messages[-1]["content"]
+                    context = rag.format_context(
+                        rag.retrieve(st.session_state.rag_index, query, k=3)
+                    )
+                else:
+                    context = chapter_text
 
-            has_images = bool(st.session_state.get("page_images"))
-            if context or has_images:
-                # One cached system block: persona + OCR text (if any).
-                # Page images ride in a cached priming turn below.
-                body = f"\n\nStudent is in {grade}. Answer STRICTLY from the uploaded chapter."
-                if context:
-                    body += f"\n\nContent:\n{context}"
-                active_system = [{
-                    "type": "text",
-                    "text": bot["prompt"] + body,
-                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
-                }]
-            else:
-                active_system = bot["prompt"] + f"\n\nStudent is in {grade}. Use general NCERT knowledge."
-
-            # Path B: prime the conversation with the page images, cached 1h.
-            priming = []
-            if has_images:
-                img_content = [
-                    {"type": "image", "source": {
-                        "type": "base64", "media_type": "image/jpeg",
-                        "data": base64.b64encode(b).decode(),
-                    }}
-                    for b in st.session_state.page_images
-                ]
-                img_content.append({
-                    "type": "text",
-                    "text": "These are the pages of my chapter.",
-                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
-                })
-                priming = [
-                    {"role": "user", "content": img_content},
-                    {"role": "assistant",
-                     "content": "I've looked at the chapter pages. Ask me anything."},
-                ]
-
-            # Cache the conversation prefix too — marker on the newest turn.
-            msgs = st.session_state.messages
-            if len(msgs) > 1:
-                msgs = msgs[:-1] + [{
-                    "role": msgs[-1]["role"],
-                    "content": [{
+                has_images = bool(st.session_state.get("page_images"))
+                if context or has_images:
+                    # One cached system block: persona + OCR text (if any).
+                    # Page images ride in a cached priming turn below.
+                    body = (
+                        f"\n\nStudent is in {grade}. Answer STRICTLY from the uploaded chapter.\n"
+                        "The chapter text may carry scan/OCR noise — garbled words, missing "
+                        "spaces, jumbled table cells, page headers spliced mid-sentence. That "
+                        "is normal: teach from what is clear, and do NOT refuse or stall over "
+                        "messy formatting. Ask for a re-upload only if there is essentially "
+                        "nothing readable. When a specific detail is unclear or a scanned "
+                        "table looks inconsistent, say so ('that row didn't scan cleanly — "
+                        "check it in your book') rather than stating it as fact. If page "
+                        "images are provided, read any table, map, diagram, chart or figure "
+                        "from the image — its text version is often scrambled."
+                    )
+                    if context:
+                        body += (
+                            "\n\n=== UPLOADED CHAPTER (the only source) ===\n"
+                            f"{context}\n"
+                            "=== END OF UPLOADED CHAPTER ==="
+                        )
+                    active_system = [{
                         "type": "text",
-                        "text": msgs[-1]["content"],
+                        "text": bot["prompt"] + body,
                         "cache_control": {"type": "ephemeral", "ttl": "1h"},
-                    }],
-                }]
+                    }]
+                else:
+                    active_system = bot["prompt"] + f"\n\nStudent is in {grade}. Use general NCERT knowledge."
 
-            response = client.messages.create(
-                model="claude-haiku-4-5",
-                max_tokens=2500,
-                system=active_system,
-                messages=priming + msgs,
-            )
-            reply = response.content[0].text
+                # Path B: prime the conversation with the page images, cached 1h.
+                priming = []
+                if has_images:
+                    img_content = [
+                        {"type": "image", "source": {
+                            "type": "base64", "media_type": "image/jpeg",
+                            "data": base64.b64encode(b).decode(),
+                        }}
+                        for b in st.session_state.page_images
+                    ]
+                    img_content.append({
+                        "type": "text",
+                        "text": "These are the pages of my chapter — the images are the "
+                                "source of truth for tables, maps and figures.",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    })
+                    priming = [
+                        {"role": "user", "content": img_content},
+                        {"role": "assistant",
+                         "content": "I've looked at the chapter pages. Ask me anything."},
+                    ]
 
-            u = response.usage
-            print(f"[cache] write={getattr(u, 'cache_creation_input_tokens', 0)} "
-                  f"read={getattr(u, 'cache_read_input_tokens', 0)} "
-                  f"uncached_in={u.input_tokens} out={u.output_tokens}")
+                # Cache the conversation prefix too — marker on the newest turn.
+                msgs = st.session_state.messages
+                if len(msgs) > 1:
+                    msgs = msgs[:-1] + [{
+                        "role": msgs[-1]["role"],
+                        "content": [{
+                            "type": "text",
+                            "text": msgs[-1]["content"],
+                            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        }],
+                    }]
 
-        st.session_state.messages.append({"role": "assistant", "content": reply})
-        st.rerun()
+                response = client.messages.create(
+                    model="claude-haiku-4-5",
+                    max_tokens=2500,
+                    system=active_system,
+                    messages=priming + msgs,
+                )
+                reply = response.content[0].text
+
+                u = response.usage
+                print(f"[cache] write={getattr(u, 'cache_creation_input_tokens', 0)} "
+                      f"read={getattr(u, 'cache_read_input_tokens', 0)} "
+                      f"uncached_in={u.input_tokens} out={u.output_tokens}")
+
+            st.session_state.messages.append({"role": "assistant", "content": reply})
+            st.rerun()
 with quiz_tab:
     st.title("🧠 Quiz Mode")
     st.caption("Generate MCQs instantly — by topic or from your own PDF")

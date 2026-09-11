@@ -44,7 +44,11 @@ context, top-k RAG dropped for single chapters, 1-hour prompt cache.
 Sprint 2B (F1, photo upload) — DONE, pending commit: Google Vision OCR + page
 images in Haiku's cached context ("Path B"), merged uploader, works for all
 three personas. max_tokens 1500 -> 2500.
-Next: Sprint 2D (F2 + F3) -> Sprint 2A before releasing to the class.
+Sprint 2D (F2 + F3) — DONE, pending commit: Columbus source-lock + shared
+graceful-degradation prompt guidance. Also fixed in the same commit: client
+rebuild + rerun-count perf (see Sprint 2D notes).
+Next: Sprint 2A (anonymous logging) — the last item before releasing to the
+class.
 
 ## What NOT to build yet
 No login/auth, no student database, no admin dashboard, 
@@ -548,33 +552,57 @@ the ~$0.09 the RAG estimate implies for 30 calls); Columbus still recalls a
 fact from early in the session; the student-facing UI is byte-for-byte
 unchanged.
 
-## Sprint 2D — Columbus source integrity + graceful degradation (planned, Sep 2026)
-Deferred until 2B is built and tested. Combines F2 and F3 — both are "Columbus
-mishandles weak source text": one invents a source (student-typed text treated
-as authoritative), one rejects a usable one ("fragments, re-upload"). One
-Columbus-prompt hardening pass covers both.
+## Sprint 2D — Columbus source integrity + graceful degradation (Sep 2026, DONE — pending commit)
+Combines F2 and F3 — both are "Columbus mishandles weak source text": one
+invents a source (student-typed text treated as authoritative), one asserts
+uncertain/scrambled content as fact. Prompt-only, no new code paths.
 
-F2: source lock in COLUMBUS_PROMPT (the chapter is only the delimited block in
-the system prompt; chat text is never chapter content; never ask the student
-to type it; never say "your chapter states..." about anything not in the
-block) + a delimited context block in app.py's prompt assembly. Revised per
-the F4 constraints: NO student-facing paste warning and NO input blocking —
-the fix is prompt-only, the app does not police what the student types.
+F2 — DONE. New "WHAT COUNTS AS THE CHAPTER" section in COLUMBUS_PROMPT: the
+chapter is only the delimited block + page images the app provides; chat text
+is never chapter content, even if the student says "the chapter says X"; never
+ask the student to type/paste/recite it; never say "your chapter states..."
+about anything not actually provided. Tested: pasting a fake "the chapter
+says..." claim is not adopted; asking outside the chapter gets "upload a
+clearer chapter", never "type it out for me".
 
-F3: prompt tells Columbus the chapter block may carry OCR/extraction noise, to
-teach from usable content, ask for a re-upload only when there is essentially
-nothing, and to hedge ("the chapter seems to say...") rather than assert when a
-passage is unclear. Optional retrieval robustness (higher k, or low-score
-fallback to raw text).
+F3 — DONE. Shared graceful-degradation guidance added to the injected `body`
+text in app.py's answer block (applies to all three personas, not just
+Columbus): scan/OCR noise is normal, teach from what's clear, don't stall over
+messy formatting, hedge on unclear/inconsistent details instead of asserting,
+and prefer the page image over OCR text for tables/maps/diagrams. Also fenced
+the chapter block ("=== UPLOADED CHAPTER ===...=== END ===") so F2's rule has
+something concrete to point at.
 
-Also in scope here: guard for image-only PDFs uploaded via the PDF button ->
-detect near-empty extraction, point the student at the photo uploader.
+Tested and fixed the actual F3 case (Sprint 2 finding): Columbus asserting
+"Red Soil found in Tamil Nadu, Karnataka, AND GUJARAT" (Gujarat is Black
+Soil's) from a rotated/angled photo of the soil table. Root-caused to photo
+quality, not the prompt: on a straight overhead single-page shot of the same
+table, Columbus now correctly says "Tamil Nadu, Karnataka" only. Confirms the
+"hold the phone straight" upload caption is doing real work, not decoration.
 
-Not started. Full plan when 2B + 2C are done.
+Also fixed in this commit (found while testing 2D, unrelated to F2/F3):
+- Anthropic/Groq clients were being rebuilt on every Streamlit rerun
+  (ChatGroq's pydantic validation was the main cost) -> wrapped both in
+  @st.cache_resource, built once per server process.
+- Chat flow needed 3 full page reruns per question (submit, show question,
+  show answer) -> collapsed to 1: the user's message renders inline via
+  st.chat_message() right after appending, in the same script pass as the API
+  call, so only the final answer needs a rerun. User-reported result: no
+  visible page refresh at all, just the spinner.
+- Confirmed NOT a bug, for the record: a single small photo upload sometimes
+  shows [cache] write=0 read=0. Anthropic's minimum cacheable prompt length is
+  2048 tokens for Haiku models; a 1-page upload's system+priming blocks can
+  land under that and simply don't cache (no error, silently bills as normal
+  input). Irrelevant in practice — content that small is cheap anyway, and the
+  actual target (whole chapters, 8+ pages) demonstrably caches (verified
+  write=4416/10455/17666 in earlier tests).
+
+Image-only PDF guard: already done in Sprint 2B (upload handler warns "a
+scanned PDF won't work, upload photos instead" when extraction is empty).
 
 ## Sprint 2A — planned: anonymous usage logging (Sep 2026)
-Status: DEPRIORITIZED to after Sprint 2D. The F1-F4 live-test findings above
-take precedence before the tool goes to the class.
+Status: NEXT UP. Sprint 2B and 2D are both done (pending commit) — this is the
+last item before releasing to the class.
 
 Goal: see how the class of 7 actually uses the tool (which persona, how
 often, PDF vs image upload, what kinds of questions) before deciding
