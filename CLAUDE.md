@@ -41,12 +41,12 @@ five follow-up problems found (F1-F5, see "Sprint 2 — live-test findings"
 below). Sprint 2A (logging) is deprioritized behind them.
 Sprint 2B-prime (F5 + F4) — DONE, shipped (commit d38fe61): whole chapter in
 context, top-k RAG dropped for single chapters, 1-hour prompt cache.
-Sprint 2B (F1, photo upload) — DONE, pending commit: Google Vision OCR + page
-images in Haiku's cached context ("Path B"), merged uploader, works for all
-three personas. max_tokens 1500 -> 2500.
-Sprint 2D (F2 + F3) — DONE, pending commit: Columbus source-lock + shared
-graceful-degradation prompt guidance. Also fixed in the same commit: client
-rebuild + rerun-count perf (see Sprint 2D notes).
+Sprint 2B (F1, photo upload) — DONE, committed and pushed (65711b3): Google
+Vision OCR + page images in Haiku's cached context ("Path B"), merged
+uploader, works for all three personas. max_tokens 1500 -> 2500.
+Sprint 2D (F2 + F3) — DONE, committed and pushed (b4e6a89): Columbus
+source-lock + shared graceful-degradation prompt guidance. Also fixed in the
+same commit: client rebuild + rerun-count perf (see Sprint 2D notes).
 Next: Sprint 2A (anonymous logging) — the last item before releasing to the
 class.
 
@@ -389,7 +389,7 @@ app.py — session state:
 - Columbus / persona prompt changes (2D: F2 source-lock, F3 genuine-garble).
 - Photo upload (2B) — sequenced AFTER 2B-prime, feeds text into this path.
 
-## Sprint 2B — Whole-chapter photo upload (Sep 2026, DONE — pending commit)
+## Sprint 2B — Whole-chapter photo upload (Sep 2026, DONE — committed 65711b3, pushed)
 Goal: a Classes 7-8 student (no official chapter PDF, physical textbook only)
 can photograph a full chapter and upload it. Fixes F1. Also serves Archimedes
 and Shakespeare (photograph a problem / an exercise). Live-tested with Columbus
@@ -552,7 +552,7 @@ the ~$0.09 the RAG estimate implies for 30 calls); Columbus still recalls a
 fact from early in the session; the student-facing UI is byte-for-byte
 unchanged.
 
-## Sprint 2D — Columbus source integrity + graceful degradation (Sep 2026, DONE — pending commit)
+## Sprint 2D — Columbus source integrity + graceful degradation (Sep 2026, DONE — committed b4e6a89, pushed)
 Combines F2 and F3 — both are "Columbus mishandles weak source text": one
 invents a source (student-typed text treated as authoritative), one asserts
 uncertain/scrambled content as fact. Prompt-only, no new code paths.

@@ -9,3 +9,6 @@ chroma_db/
 .streamlit/secrets.toml
 *service-account*.json
 gcp-*.json
+
+# Local anonymous usage log — durable copy lives in the Google Sheet
+usage_log.jsonl

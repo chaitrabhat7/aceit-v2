@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 import rag
 import vision
+import usage_log
 
 load_dotenv()
 
@@ -31,8 +32,21 @@ def get_groq_client():
     )
 
 
+@st.cache_resource
+def init_usage_sheet():
+    # Auth is a network call — cached so it only runs once per server
+    # process, not on every Streamlit rerun. Silently a no-op if the
+    # secret isn't set (e.g. local dev without Sheets configured).
+    if "usage_sheet_id" in st.secrets:
+        usage_log.configure_sheet(
+            st.secrets["gcp_service_account"], st.secrets["usage_sheet_id"]
+        )
+    return True
+
+
 client = get_anthropic_client()
 groq_client = get_groq_client()
+init_usage_sheet()
 
 TUTOR_QUESTION_LIMIT = 30
 QUIZ_GENERATION_LIMIT = 4
@@ -505,8 +519,18 @@ if uploaded_files:
                     "📚 This looks like more than one chapter — I'll use the most "
                     "relevant sections. Upload a single chapter for the best results."
                 )
+                usage_log.log_event(
+                    "pdf_uploaded", persona=selected_bot, grade=grade,
+                    file_type="txt" if doc.type == "text/plain" else "pdf",
+                    chars=len(chapter_now), oversized=True,
+                )
             else:
                 st.session_state.rag_index = None
+                usage_log.log_event(
+                    "pdf_uploaded", persona=selected_bot, grade=grade,
+                    file_type="txt" if doc.type == "text/plain" else "pdf",
+                    chars=len(chapter_now), oversized=False,
+                )
 
         elif imgs:
             if len(imgs) > MAX_PAGE_IMAGES:
@@ -542,6 +566,11 @@ if uploaded_files:
                     st.session_state.loaded_file = f"{len(imgs)} page photo{plural}"
                     st.session_state.loaded_sig = sig
                     st.session_state.chapter_build_count += 1
+                    usage_log.log_event(
+                        "image_uploaded", persona=selected_bot, grade=grade,
+                        num_pages=len(imgs),
+                        ocr_failed_count=len(result["ocr_failed"]),
+                    )
                     if result["ocr_failed"]:
                         pages = ", ".join(map(str, result["ocr_failed"]))
                         st.info(
@@ -590,6 +619,16 @@ with tutor_tab:
             )
         else:
             st.session_state.tutor_question_count += 1
+            if st.session_state.get("loaded_via_image"):
+                source = "image"
+            elif st.session_state.get("loaded_file"):
+                source = "pdf"
+            else:
+                source = "none"
+            usage_log.log_event(
+                "tutor_question", persona=selected_bot, grade=grade,
+                source=source, question_text=user_input,
+            )
             st.session_state.messages.append({"role": "user", "content": user_input})
             # Show the question immediately instead of waiting for a rerun —
             # cuts a full page reload out of every question (was 3, now 2).
@@ -819,6 +858,11 @@ with quiz_tab:
                         st.session_state.quiz_topic = quiz_topic
                         st.session_state.quiz_grade = quiz_grade
                         st.session_state.quiz_difficulty = quiz_difficulty
+                        usage_log.log_event(
+                            "quiz_generated", subject=quiz_subject, grade=quiz_grade,
+                            difficulty=quiz_difficulty, num_questions=num_questions,
+                            source="pdf" if quiz_chapter_text else "topic",
+                        )
 
                 except Exception as e:
                     st.error(f"❌ Something went wrong: {e}")
