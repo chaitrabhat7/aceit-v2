@@ -47,8 +47,10 @@ uploader, works for all three personas. max_tokens 1500 -> 2500.
 Sprint 2D (F2 + F3) — DONE, committed and pushed (b4e6a89): Columbus
 source-lock + shared graceful-degradation prompt guidance. Also fixed in the
 same commit: client rebuild + rerun-count perf (see Sprint 2D notes).
-Next: Sprint 2A (anonymous logging) — the last item before releasing to the
-class.
+Sprint 2A (anonymous logging) — DONE, committed and pushed (103ac78): see
+"Sprint 2A — anonymous usage logging" below.
+
+All sprints complete. Next: release to the class.
 
 ## What NOT to build yet
 No login/auth, no student database, no admin dashboard, 
@@ -600,30 +602,45 @@ Also fixed in this commit (found while testing 2D, unrelated to F2/F3):
 Image-only PDF guard: already done in Sprint 2B (upload handler warns "a
 scanned PDF won't work, upload photos instead" when extraction is empty).
 
-## Sprint 2A — planned: anonymous usage logging (Sep 2026)
-Status: NEXT UP. Sprint 2B and 2D are both done (pending commit) — this is the
-last item before releasing to the class.
+## Sprint 2A — anonymous usage logging (Sep 2026, DONE — committed 103ac78, pushed)
+Last item before releasing to the class. Goal: see how the class of 7
+actually uses the tool (which persona, how often, PDF vs image upload, what
+kinds of questions) before deciding whether to keep Groq/Haiku as-is or swap
+providers for cost reasons.
 
-Goal: see how the class of 7 actually uses the tool (which persona, how
-often, PDF vs image upload, what kinds of questions) before deciding
-whether to keep Groq/Haiku as-is or swap providers for cost reasons.
-
-Decisions already made (see chat history for full reasoning):
+Decisions:
 - Fully anonymous — no student name, ID, or session identifier captured
-  anywhere in a log entry. This was a deliberate choice given "no student
-  database" above and that students are minors.
-- Storage: local JSONL file via usage_log.py's log_event(action, **fields)
-  — one JSON object per line, module built and manually tested.
-- Each entry: UTC timestamp, an action string (tutor_question,
-  pdf_uploaded, image_uploaded, quiz_generated), plus context fields
-  (persona, subject, difficulty) and, for tutor questions, the full
+  anywhere in a log entry. Deliberate given "no student database" above and
+  that students are minors.
+- Each entry: UTC timestamp, an action string (tutor_question, pdf_uploaded,
+  image_uploaded, quiz_generated), plus context fields (persona, grade,
+  source, subject, difficulty, etc.) and, for tutor questions, the full
   question text — chosen over metadata-only so "what kind of questions are
   they asking" is actually answerable later.
-- Known caveat: Streamlit Community Cloud's filesystem is not guaranteed
-  persistent across redeploys/restarts. Treat usage_log.jsonl as something
-  to check/export before pushing any code change, not a durable store.
-  Open question, not yet decided: whether to add an in-app "download log"
-  button as mitigation.
-- Not yet wired into app.py. Wiring means a log_event() call at: each of
-  the 3 personas' question-send path, PDF upload, image upload (once
-  vision.py is also wired in), and quiz generation.
+- Two destinations, both written by usage_log.py's log_event(action,
+  **fields): (1) local usage_log.jsonl (one JSON object per line — useful
+  for local dev, gitignored, never committed), and (2) a Google Sheet, added
+  after realizing Streamlit Community Cloud gives no filesystem/SSH access
+  to a deployed app, so the local file alone would be unreadable once
+  deployed. The Sheet is also the fix for the "local disk isn't guaranteed
+  to survive a redeploy or container sleep/restart" durability problem —
+  no need for the local file to be the source of truth in production.
+  usage_log.configure_sheet(credentials_info, sheet_id) wires it up once
+  (via gspread, reusing the same gcp_service_account already used for
+  Vision — just needs the Sheet shared with that service account's
+  client_email and the Sheets API enabled in the aceit-508108 GCP project).
+  Both writes are independently try/except-guarded — a Sheets or disk
+  failure can never break the tutor/quiz flow.
+- Sheet ID lives in st.secrets["usage_sheet_id"] (local .streamlit/
+  secrets.toml + Streamlit Cloud's Edit Secrets), read once at startup via
+  a @st.cache_resource-wrapped init so the auth handshake isn't repeated on
+  every rerun.
+- Wired into app.py at all 4 points: each persona's question-send path,
+  PDF/TXT chapter upload, photo chapter upload, and quiz generation
+  (both topic-typed and PDF-detected, sharing one action with a
+  source field).
+- Verified end-to-end: a test log_event() call landed in both the local file
+  and the Sheet; row deleted after confirming.
+
+All sprints (1A, 1B, 1C, 2, 2B-prime, 2B, 2D, 2A) are now complete and
+pushed. Next: release to the class.
