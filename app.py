@@ -48,6 +48,10 @@ client = get_anthropic_client()
 groq_client = get_groq_client()
 init_usage_sheet()
 
+# Trial-group attribution: each student gets a link like ?student=aditi so
+# usage log rows can be told apart without asking them to type a name.
+student_id = st.query_params.get("student", "unknown")
+
 TUTOR_QUESTION_LIMIT = 30
 QUIZ_GENERATION_LIMIT = 4
 # A real 24-page NCERT chapter extracts to ~44K chars. Above this an upload is
@@ -60,6 +64,11 @@ OVERSIZE_CHARS = 80_000
 # against TUTOR_QUESTION_LIMIT, not this.
 MAX_PAGE_IMAGES = 20
 CHAPTER_BUILD_LIMIT = 8
+# Quiz-mode PDF topic detection had no size guard, unlike every other upload
+# path. Same idea as OVERSIZE_CHARS: reject a full textbook before it's ever
+# parsed for a single-chapter quiz.
+QUIZ_PDF_MAX_PAGES = 25
+QUIZ_PDF_MAX_BYTES = 1_000_000
 # NOTE: Groq output has been observed using LaTeX notation (e.g. \frac{24}{36})
 # in question/explanation text. st.markdown won't render this as math unless
 # wrapped in $...$, so it may show as raw backslash text in the quiz UI.
@@ -520,14 +529,16 @@ if uploaded_files:
                     "relevant sections. Upload a single chapter for the best results."
                 )
                 usage_log.log_event(
-                    "pdf_uploaded", persona=selected_bot, grade=grade,
+                    "pdf_uploaded", student_id=student_id, persona=selected_bot,
+                    grade=grade,
                     file_type="txt" if doc.type == "text/plain" else "pdf",
                     chars=len(chapter_now), oversized=True,
                 )
             else:
                 st.session_state.rag_index = None
                 usage_log.log_event(
-                    "pdf_uploaded", persona=selected_bot, grade=grade,
+                    "pdf_uploaded", student_id=student_id, persona=selected_bot,
+                    grade=grade,
                     file_type="txt" if doc.type == "text/plain" else "pdf",
                     chars=len(chapter_now), oversized=False,
                 )
@@ -567,7 +578,8 @@ if uploaded_files:
                     st.session_state.loaded_sig = sig
                     st.session_state.chapter_build_count += 1
                     usage_log.log_event(
-                        "image_uploaded", persona=selected_bot, grade=grade,
+                        "image_uploaded", student_id=student_id,
+                        persona=selected_bot, grade=grade,
                         num_pages=len(imgs),
                         ocr_failed_count=len(result["ocr_failed"]),
                     )
@@ -626,8 +638,8 @@ with tutor_tab:
             else:
                 source = "none"
             usage_log.log_event(
-                "tutor_question", persona=selected_bot, grade=grade,
-                source=source, question_text=user_input,
+                "tutor_question", student_id=student_id, persona=selected_bot,
+                grade=grade, source=source, question_text=user_input,
             )
             st.session_state.messages.append({"role": "user", "content": user_input})
             # Show the question immediately instead of waiting for a rerun —
@@ -766,19 +778,31 @@ with quiz_tab:
         quiz_pdf = st.file_uploader(
             "Upload a chapter, worksheet or question paper (PDF or TXT)",
             type=["pdf", "txt"],
+            help="Please upload a single chapter — up to 25 pages / 1MB.",
             key="quiz_pdf_uploader"
         )
 
         if quiz_pdf:
-            if quiz_pdf.type == "text/plain":
+            if quiz_pdf.size > QUIZ_PDF_MAX_BYTES:
+                st.error(
+                    "Please upload a single chapter (up to 25 pages) rather "
+                    "than a full textbook or multiple chapters."
+                )
+            elif quiz_pdf.type == "text/plain":
                 quiz_chapter_text = quiz_pdf.read().decode("utf-8")
             elif quiz_pdf.type == "application/pdf":
                 try:
                     import PyPDF2
                     pdf_reader = PyPDF2.PdfReader(quiz_pdf)
-                    quiz_chapter_text = ""
-                    for page in pdf_reader.pages:
-                        quiz_chapter_text += page.extract_text()
+                    if len(pdf_reader.pages) > QUIZ_PDF_MAX_PAGES:
+                        st.error(
+                            "Please upload a single chapter (up to 25 pages) "
+                            "rather than a full textbook or multiple chapters."
+                        )
+                    else:
+                        quiz_chapter_text = ""
+                        for page in pdf_reader.pages:
+                            quiz_chapter_text += page.extract_text()
                 except Exception as e:
                     st.error(f"❌ Could not read PDF: {e}")
 
@@ -859,7 +883,8 @@ with quiz_tab:
                         st.session_state.quiz_grade = quiz_grade
                         st.session_state.quiz_difficulty = quiz_difficulty
                         usage_log.log_event(
-                            "quiz_generated", subject=quiz_subject, grade=quiz_grade,
+                            "quiz_generated", student_id=student_id,
+                            subject=quiz_subject, grade=quiz_grade,
                             difficulty=quiz_difficulty, num_questions=num_questions,
                             source="pdf" if quiz_chapter_text else "topic",
                         )
