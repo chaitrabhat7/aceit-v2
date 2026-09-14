@@ -48,9 +48,9 @@ client = get_anthropic_client()
 groq_client = get_groq_client()
 init_usage_sheet()
 
-# Trial-group attribution: each student gets a link like ?student=aditi so
+# Trial-group attribution: each student gets a link like ?student_id=71 so
 # usage log rows can be told apart without asking them to type a name.
-student_id = st.query_params.get("student", "unknown")
+student_id = st.query_params.get("student_id", "unknown")
 
 TUTOR_QUESTION_LIMIT = 30
 QUIZ_GENERATION_LIMIT = 4

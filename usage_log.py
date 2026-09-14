@@ -71,6 +71,10 @@ def log_event(action, **fields):
     if _sheet is not None:
         try:
             row = [str(entry.get(col, "")) for col in _SHEET_COLUMNS]
-            _sheet.append_row(row, value_input_option="RAW")
+            # table_range anchors the append at column A. Without it, gspread
+            # asks Sheets to auto-detect where the table starts, which can
+            # drift right if the sheet has any irregular rows (e.g. from
+            # earlier mis-shaped test data) - pinning it avoids that entirely.
+            _sheet.append_row(row, value_input_option="RAW", table_range="A1")
         except Exception:
             pass
