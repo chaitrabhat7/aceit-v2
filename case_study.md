@@ -40,7 +40,7 @@ Columbus is the strictest and the most interesting engineering case — see [§6
 
 ### 4.2 Quiz mode
 
-- **Two ways to pick a topic:** type one directly, or upload a PDF/TXT (capped at 25 pages / 1MB — a pre-launch fix, so this path has the same size guard tutor-mode chapter uploads already had) and let the app detect the topic.
+- **Two ways to pick a topic:** type one directly, or upload a PDF/TXT (capped at 30 pages / 8MB — loose enough for a real single chapter with diagrams, tight enough to still reject a full textbook) and let the app detect the topic.
 - **Four difficulty levels:** Easy, Medium, Hard (all via Groq's free tier), and **HOTS** (Higher-Order Thinking Skills — via Claude Sonnet, because Groq's quality gap was too large for this tier in testing).
 - **3–10 questions per quiz**, capped at 4 quiz-generation actions per session (an upload's topic-detection and the Generate button share this same counter).
 - Quiz questions are always freshly generated, never copied from an uploaded document — even when a PDF was the topic source.
@@ -155,12 +155,17 @@ This closely matches the *actual pre-fix measurement* from the F4 finding (a rea
 
 For the pilot's ~7 students, even if every single one hit the realistic worst case in the same day: **7 × $0.75 ≈ $5.25 (~₹450)**. Even the pathological no-caching ceiling for all 7 students in one day is **≈ $16.50 (~₹1,400)**. Both are small enough that cost is not a constraint on running the pilot; the open questions are about answer quality and usage patterns, which is exactly what Sprint 2A's anonymous logging exists to surface.
 
-### 8.6 Pre-launch fix: quiz-mode upload cap
+### 8.6 Quiz-mode upload: cap tuning + a rerun bug
 
-Quiz-mode's PDF-topic-detection path (`detect_topic()`) originally had **no size cap** on the uploaded document — unlike the tutor path's 80,000-character oversized-fallback guard. A student uploading an unusually large document there (a full textbook rather than a chapter) would have cost proportionally more, uncached, with no warning shown. Fixed pre-launch: a 25-page / 1MB cap, checked before the file is even parsed, rejects an oversized upload with a friendly message instead of processing it.
+Quiz-mode's PDF-topic-detection path (`detect_topic()`) originally had **no size cap** on the uploaded document — unlike the tutor path's 80,000-character oversized-fallback guard. A student uploading an unusually large document there (a full textbook rather than a chapter) would have cost proportionally more, uncached, with no warning shown. Fixed pre-launch (commit 56791ae): a 25-page / 1MB cap, checked before the file is even parsed, rejects an oversized upload with a friendly message instead of processing it.
+
+Two further issues surfaced once real chapter PDFs hit that cap:
+
+- **The cap itself was too tight.** A single chapter with a couple of diagrams (2.1MB) or one page over 25 (a real Class 9 NCERT Maths chapter, 26 pages) got rejected with a message implying it was a full textbook, when it wasn't. Raised to 30 pages / 8MB. Byte size isn't actually the "single chapter vs textbook" signal — PyPDF2 extracts text only, so embedded images don't inflate token cost — so the byte cap is now a loose backstop and the page cap does the real work.
+- **A missing dedup guard was burning quota before Generate was ever clicked.** Unlike the tutor-mode uploader, the quiz uploader re-ran `detect_topic()` and re-incremented the shared `quiz_generation_count` on *every* Streamlit rerun — including the rerun triggered by the Generate click itself — because the uploaded file persists across reruns and nothing was skipping already-processed content. One upload plus one Generate click could burn 2–3 of the 4 allowed generations on redundant re-detection alone, before a quiz was ever actually generated. Once the counter maxed out, the visible symptom was a confusing "Please enter a topic or upload a PDF first," despite a real PDF being attached the whole time. Fixed by hashing the extracted chapter text and only re-detecting when the hash changes — the same pattern the tutor-mode uploader already used.
 
 ---
 
 ## 9. Status
 
-All planned sprints (1A, 1B, 1C, 2, 2B-prime, 2B, 2D, 2A) are complete and pushed, plus two pre-launch fixes for the trial pilot: the quiz-mode upload cap (§8.6) and per-student URL tracking (§4.3). The app is live and ready for the class pilot; usage data collection is the next input into deciding what (if anything) changes before a wider release.
+All planned sprints (1A, 1B, 1C, 2, 2B-prime, 2B, 2D, 2A) are complete and pushed, plus three fixes found during trial-pilot prep: per-student URL tracking (§4.3), and the quiz-mode upload cap plus the rerun/quota bug it exposed (§8.6). The app is live and ready for the class pilot; usage data collection is the next input into deciding what (if anything) changes before a wider release.
