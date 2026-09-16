@@ -66,9 +66,12 @@ MAX_PAGE_IMAGES = 20
 CHAPTER_BUILD_LIMIT = 8
 # Quiz-mode PDF topic detection had no size guard, unlike every other upload
 # path. Same idea as OVERSIZE_CHARS: reject a full textbook before it's ever
-# parsed for a single-chapter quiz.
-QUIZ_PDF_MAX_PAGES = 25
-QUIZ_PDF_MAX_BYTES = 1_000_000
+# parsed for a single-chapter quiz. The page count is the real "single
+# chapter vs textbook" signal; the byte cap is just a backstop against
+# something absurd, so it's set loose enough that an image-heavy single
+# chapter (common for CBSE science/social studies) doesn't get bounced.
+QUIZ_PDF_MAX_PAGES = 30
+QUIZ_PDF_MAX_BYTES = 8_000_000
 # NOTE: Groq output has been observed using LaTeX notation (e.g. \frac{24}{36})
 # in question/explanation text. st.markdown won't render this as math unless
 # wrapped in $...$, so it may show as raw backslash text in the quiz UI.
@@ -395,6 +398,10 @@ if "quiz_revealed" not in st.session_state:
     st.session_state.quiz_revealed = {}
 if "quiz_topic" not in st.session_state:
     st.session_state.quiz_topic = ""
+if "quiz_pdf_sig" not in st.session_state:
+    st.session_state.quiz_pdf_sig = None
+if "quiz_detected_topic" not in st.session_state:
+    st.session_state.quiz_detected_topic = None
 if "quiz_grade" not in st.session_state:
     st.session_state.quiz_grade = ""
 if "quiz_difficulty" not in st.session_state:
@@ -778,14 +785,14 @@ with quiz_tab:
         quiz_pdf = st.file_uploader(
             "Upload a chapter, worksheet or question paper (PDF or TXT)",
             type=["pdf", "txt"],
-            help="Please upload a single chapter — up to 25 pages / 1MB.",
+            help="Please upload a single chapter — up to 30 pages / 8MB.",
             key="quiz_pdf_uploader"
         )
 
         if quiz_pdf:
             if quiz_pdf.size > QUIZ_PDF_MAX_BYTES:
                 st.error(
-                    "Please upload a single chapter (up to 25 pages) rather "
+                    "Please upload a single chapter (up to 30 pages) rather "
                     "than a full textbook or multiple chapters."
                 )
             elif quiz_pdf.type == "text/plain":
@@ -796,7 +803,7 @@ with quiz_tab:
                     pdf_reader = PyPDF2.PdfReader(quiz_pdf)
                     if len(pdf_reader.pages) > QUIZ_PDF_MAX_PAGES:
                         st.error(
-                            "Please upload a single chapter (up to 25 pages) "
+                            "Please upload a single chapter (up to 30 pages) "
                             "rather than a full textbook or multiple chapters."
                         )
                     else:
@@ -807,7 +814,15 @@ with quiz_tab:
                     st.error(f"❌ Could not read PDF: {e}")
 
             if quiz_chapter_text:
-                if st.session_state.quiz_generation_count >= QUIZ_GENERATION_LIMIT:
+                # Streamlit reruns this whole script on every interaction
+                # (including the Generate click itself), and the uploaded
+                # file stays attached across reruns — without this guard,
+                # detect_topic() and the quota counter below would fire
+                # again on every rerun, not just once per upload.
+                quiz_pdf_sig = hashlib.md5(quiz_chapter_text.encode("utf-8")).hexdigest()
+                if st.session_state.quiz_pdf_sig == quiz_pdf_sig:
+                    quiz_topic = st.session_state.quiz_detected_topic
+                elif st.session_state.quiz_generation_count >= QUIZ_GENERATION_LIMIT:
                     st.warning(
                         f"⚠️ Session limit reached ({QUIZ_GENERATION_LIMIT} quiz generations). "
                         "Refresh the page to start a new session."
@@ -820,6 +835,8 @@ with quiz_tab:
                                 quiz_subject, quiz_grade, quiz_chapter_text
                             )
                             quiz_topic = detected["detected_topic"]
+                            st.session_state.quiz_pdf_sig = quiz_pdf_sig
+                            st.session_state.quiz_detected_topic = quiz_topic
                             st.success(
                                 f"📌 Detected: **{detected['detected_topic']}** "
                                 f"— {detected['summary']}"
