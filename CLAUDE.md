@@ -644,3 +644,53 @@ Decisions:
 
 All sprints (1A, 1B, 1C, 2, 2B-prime, 2B, 2D, 2A) are now complete and
 pushed. Next: release to the class.
+
+## Post-launch-prep bug — quiz PDF upload rejecting real chapters (Sep 2026, DONE)
+Found while investigating a "issues with quiz generation" report from Chaitra.
+Symptom: uploading a real single-chapter PDF in Quiz Mode and clicking
+Generate showed "⚠️ Please enter a topic or upload a PDF first." even though
+a PDF was attached, or "⚠️ Session limit reached" well before 4 real
+generations had happened.
+
+Root cause: the quiz-mode PDF uploader had no dedup guard, unlike the
+tutor-mode uploader (which already hashes upload content before
+reprocessing — see Sprint 1B/2B). Streamlit reruns the whole script on every
+interaction, including the Generate click itself, and the uploaded file
+stays attached across reruns. So detect_topic() and the shared
+quiz_generation_count counter were firing again on every rerun, not just
+once per upload — one upload + one Generate click could burn 2-3 of the 4
+allowed generations on redundant re-detection alone, before generate_quiz()
+ever ran. Once the counter hit the cap, detect_topic() stopped being called
+and the local quiz_topic variable (reset to None at the top of every rerun)
+stayed empty, so the Generate button fell through to the "no PDF" warning.
+
+Fix: added quiz_pdf_sig + quiz_detected_topic to session state. The upload
+handler now hashes the extracted chapter_text and only calls detect_topic()
+/ increments the counter when the hash is new; a rerun with the same content
+(e.g. the Generate click itself, or an unrelated widget change) reuses the
+cached topic instead of re-detecting. Verified via a standalone simulation
+of the exact rerun sequence (upload -> unrelated widget changes -> Generate
+click) — old logic: 4 detect_topic calls, count exhausted before a real
+generation; new logic: 1 call, count stays at 1.
+
+Separately, while testing this, two more pre-existing issues in the same
+upload path surfaced and were fixed in the same pass:
+- QUIZ_PDF_MAX_BYTES (from the "Pre-launch fixes" commit, 56791ae) was set to
+  1MB — too tight for a real single chapter with diagrams/photos (common for
+  CBSE science/social studies). Raised to 8MB. Byte size isn't the real
+  "single chapter vs textbook" signal anyway — PyPDF2 extracts text only, so
+  a chapter's extracted-text length (and therefore token cost) doesn't scale
+  with embedded images. QUIZ_PDF_MAX_PAGES stays the real gate against a
+  full textbook.
+- QUIZ_PDF_MAX_PAGES was 25; a real Class 9 NCERT Maths chapter
+  (lesson_5.pdf) came in at 26 pages and got rejected as if it were a
+  textbook. Raised to 30.
+- Unrelated to the code: Chaitra's local .env had a stale ANTHROPIC_API_KEY
+  that didn't match the one live in Streamlit Cloud's secrets (confirmed by
+  calling the Anthropic API directly with the local key — genuine 401
+  authentication_error). Re-synced; not a bug in app.py.
+
+Cost note: the byte/page cap increases don't raise the worst-case per-call
+token cost — chapter_text length was already bounded by the (unchanged
+until now) page cap, and images don't add extracted text. They just stop
+rejecting legitimate chapters that were already within that cost envelope.
