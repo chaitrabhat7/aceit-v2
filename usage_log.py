@@ -23,7 +23,7 @@ LOG_PATH = os.path.join(os.path.dirname(__file__), "usage_log.jsonl")
 _SHEET_COLUMNS = [
     "timestamp", "action", "student_id", "persona", "grade", "source",
     "question_text", "file_type", "chars", "oversized", "num_pages",
-    "ocr_failed_count", "subject", "difficulty", "num_questions",
+    "ocr_failed_count", "subject", "difficulty", "num_questions", "error",
 ]
 
 _sheet = None

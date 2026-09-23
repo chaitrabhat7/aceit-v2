@@ -733,21 +733,42 @@ with tutor_tab:
                         }],
                     }]
 
-                response = client.messages.create(
-                    model="claude-haiku-4-5",
-                    max_tokens=2500,
-                    system=active_system,
-                    messages=priming + msgs,
+                # Any API failure (spend limit hit, outage, bad request) must not
+                # crash the page or leave an unanswered question stuck in history.
+                api_error = None
+                try:
+                    response = client.messages.create(
+                        model="claude-haiku-4-5",
+                        max_tokens=2500,
+                        system=active_system,
+                        messages=priming + msgs,
+                    )
+                except anthropic.APIError as e:
+                    api_error = e
+
+                if api_error is None:
+                    reply = response.content[0].text
+                    u = response.usage
+                    print(f"[cache] write={getattr(u, 'cache_creation_input_tokens', 0)} "
+                          f"read={getattr(u, 'cache_read_input_tokens', 0)} "
+                          f"uncached_in={u.input_tokens} out={u.output_tokens}")
+
+            if api_error is not None:
+                # Undo the question: drop it from history and refund the count.
+                st.session_state.messages.pop()
+                st.session_state.tutor_question_count -= 1
+                print(f"[tutor-error] {api_error!r}")
+                usage_log.log_event(
+                    "tutor_error", student_id=student_id, persona=selected_bot,
+                    grade=grade, source=source, error=str(api_error)[:500],
                 )
-                reply = response.content[0].text
-
-                u = response.usage
-                print(f"[cache] write={getattr(u, 'cache_creation_input_tokens', 0)} "
-                      f"read={getattr(u, 'cache_read_input_tokens', 0)} "
-                      f"uncached_in={u.input_tokens} out={u.output_tokens}")
-
-            st.session_state.messages.append({"role": "assistant", "content": reply})
-            st.rerun()
+                st.error(
+                    "😕 The tutor couldn't answer just now. Please try again in "
+                    "a little while — this question wasn't counted."
+                )
+            else:
+                st.session_state.messages.append({"role": "assistant", "content": reply})
+                st.rerun()
 with quiz_tab:
     st.title("🧠 Quiz Mode")
     st.caption("Generate MCQs instantly — by topic or from your own PDF")
